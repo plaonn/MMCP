@@ -1,0 +1,2 @@
+# MMCP
+Mail MCP
