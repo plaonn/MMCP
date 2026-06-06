@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { loadConfig } from "../src/config.js";
 
@@ -23,6 +25,7 @@ describe("loadConfig", () => {
     });
     expect(config.maxEmailBytes).toBe(5 * 1024 * 1024);
     expect(config.publicUrl.href).toBe("https://mail.example.com/mcp");
+    expect(config.policyPath).toBe(join(homedir(), ".config/mmcp/mail-policy.json"));
   });
 
   it("필수 비밀값이 없으면 오류를 발생시킴", () => {

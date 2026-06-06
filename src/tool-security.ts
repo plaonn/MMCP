@@ -1,6 +1,11 @@
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 export const toolScopes: Record<string, "mail.read" | "mail.modify"> = {
+  get_mail_policy: "mail.read",
+  preview_mail_policy_patch: "mail.read",
+  apply_mail_policy_patch: "mail.modify",
+  get_mail_policy_history: "mail.read",
+  revert_mail_policy_revision: "mail.modify",
   check_connection: "mail.read",
   get_server_capabilities: "mail.read",
   get_quota: "mail.read",

@@ -12,6 +12,7 @@ import type { Config } from "./config.js";
 import type { EmailReader } from "./email/types.js";
 import { createMcpServer } from "./mcp-server.js";
 import { PersonalOAuthProvider } from "./oauth-provider.js";
+import { PolicyStore } from "./policy-store.js";
 import { addTopLevelToolSecuritySchemes } from "./tool-security.js";
 
 export function createApp(config: Config, emailReader: EmailReader) {
@@ -21,6 +22,7 @@ export function createApp(config: Config, emailReader: EmailReader) {
     ...config.oauth,
     resourceUrl: config.publicUrl
   });
+  const policyStore = new PolicyStore(config.policyPath);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(config.publicUrl);
 
   app.use(mcpAuthRouter({
@@ -58,7 +60,8 @@ export function createApp(config: Config, emailReader: EmailReader) {
     });
 
     const server = createMcpServer(emailReader, {
-      grantedScopes: request.auth?.scopes ?? []
+      grantedScopes: request.auth?.scopes ?? [],
+      policyStore
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

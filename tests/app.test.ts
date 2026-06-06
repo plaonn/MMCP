@@ -1,7 +1,9 @@
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { rmSync } from "node:fs";
+
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
@@ -15,6 +17,7 @@ const config: Config = {
     ownerPassword: "owner-password-value",
     signingSecret: "s".repeat(32)
   },
+  policyPath: `/tmp/mmcp-app-test-policy-${process.pid}.json`,
   imap: {
     host: "imap.naver.com",
     port: 993,
@@ -81,6 +84,10 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => {
     server.close(() => resolve());
   })));
+});
+
+afterAll(() => {
+  rmSync(config.policyPath, { force: true });
 });
 
 describe("HTTP app", () => {

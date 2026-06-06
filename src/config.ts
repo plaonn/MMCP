@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
 import { z } from "zod";
 
 const environmentSchema = z.object({
@@ -6,6 +9,7 @@ const environmentSchema = z.object({
   MMCP_PUBLIC_URL: z.url(),
   MMCP_OAUTH_OWNER_PASSWORD: z.string().min(16),
   MMCP_OAUTH_SIGNING_SECRET: z.string().min(32),
+  MMCP_POLICY_PATH: z.string().min(1).default("~/.config/mmcp/mail-policy.json"),
   IMAP_HOST: z.string().min(1).default("imap.naver.com"),
   IMAP_PORT: z.coerce.number().int().min(1).max(65535).default(993),
   IMAP_SECURE: z
@@ -30,6 +34,7 @@ export type Config = {
     ownerPassword: string;
     signingSecret: string;
   };
+  policyPath: string;
   imap: {
     host: string;
     port: number;
@@ -59,6 +64,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
       ownerPassword: parsed.data.MMCP_OAUTH_OWNER_PASSWORD,
       signingSecret: parsed.data.MMCP_OAUTH_SIGNING_SECRET
     },
+    policyPath: resolvePolicyPath(parsed.data.MMCP_POLICY_PATH),
     imap: {
       host: parsed.data.IMAP_HOST,
       port: parsed.data.IMAP_PORT,
@@ -68,4 +74,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
     },
     maxEmailBytes: parsed.data.MMCP_MAX_EMAIL_BYTES
   };
+}
+
+function resolvePolicyPath(path: string): string {
+  return path === "~" || path.startsWith("~/")
+    ? resolve(homedir(), path.slice(2))
+    : resolve(path);
 }

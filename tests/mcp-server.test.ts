@@ -1,9 +1,14 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EmailReader } from "../src/email/types.js";
 import { createMcpServer } from "../src/mcp-server.js";
+import { PolicyStore } from "../src/policy-store.js";
 
 const emailReader: EmailReader = {
   checkConnection: vi.fn(async () => ({ connected: true as const })),
@@ -98,6 +103,7 @@ describe("MCP tools", () => {
       const result = await client.listTools();
 
       expect(result.tools.map((tool) => tool.name).sort()).toEqual([
+        "apply_mail_policy_patch",
         "check_connection",
         "copy_email",
         "create_mailbox",
@@ -106,10 +112,14 @@ describe("MCP tools", () => {
         "get_email_source",
         "get_quota",
         "get_server_capabilities",
+        "get_mail_policy",
+        "get_mail_policy_history",
         "list_mailboxes",
         "mark_email_as_spam",
         "move_email",
+        "preview_mail_policy_patch",
         "rename_mailbox",
+        "revert_mail_policy_revision",
         "set_email_flagged_status",
         "set_email_read_status",
         "set_mailbox_subscription",
@@ -234,10 +244,59 @@ describe("MCP tools", () => {
       );
     });
   });
+
+  it("정책을 조회하고 patch를 미리 본 뒤 적용함", async () => {
+    await withClient(async (client) => {
+      expect(client.getInstructions()).toContain("현재 메일 관리 정책 revision 1");
+      expect(client.getInstructions()).toContain("ask-when-uncertain");
+
+      const current = await client.callTool({
+        name: "get_mail_policy",
+        arguments: {}
+      });
+      expect(current.structuredContent).toMatchObject({
+        result: { revision: 1 }
+      });
+
+      const patch = {
+        expectedRevision: 1,
+        operations: [{
+          operation: "add",
+          rule: { id: "protect-personal", text: "개인 메일은 신중하게 처리함." }
+        }]
+      };
+      const preview = await client.callTool({
+        name: "preview_mail_policy_patch",
+        arguments: patch
+      });
+      expect(preview.structuredContent).toMatchObject({
+        result: { currentRevision: 1, nextRevision: 2 }
+      });
+
+      const applied = await client.callTool({
+        name: "apply_mail_policy_patch",
+        arguments: patch
+      });
+      expect(applied.structuredContent).toMatchObject({
+        result: { currentRevision: 1, nextRevision: 2 }
+      });
+      expect(
+        (await client.callTool({
+          name: "get_mail_policy_history",
+          arguments: { limit: 10 }
+        })).structuredContent
+      ).toMatchObject({
+        result: [{ revision: 2 }, { revision: 1 }]
+      });
+    });
+  });
 });
 
 async function withClient(operation: (client: Client) => Promise<void>): Promise<void> {
-  const server = createMcpServer(emailReader);
+  const directory = mkdtempSync(join(tmpdir(), "mmcp-mcp-policy-test-"));
+  const server = createMcpServer(emailReader, {
+    policyStore: new PolicyStore(join(directory, "policy.json"))
+  });
   const client = new Client({ name: "mmcp-test", version: "0.1.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -248,5 +307,6 @@ async function withClient(operation: (client: Client) => Promise<void>): Promise
   } finally {
     await client.close();
     await server.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 }
