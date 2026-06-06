@@ -64,5 +64,4 @@ export interface EmailReader {
   getEmail(mailbox: string, uid: number): Promise<EmailDetail>;
   setEmailReadStatus(mailbox: string, uid: number, read: boolean): Promise<ReadStatusResult>;
   moveEmail(mailbox: string, uid: number, destinationMailbox: string): Promise<MoveEmailResult>;
-  archiveEmail(mailbox: string, uid: number): Promise<MoveEmailResult>;
 }

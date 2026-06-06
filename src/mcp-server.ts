@@ -116,25 +116,6 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
       safeTool(() => emailReader.moveEmail(mailbox, uid, destinationMailbox))
   );
 
-  server.registerTool(
-    "archive_email",
-    {
-      title: "이메일 보관",
-      description:
-        "편지함 경로와 IMAP UID로 지정한 단일 이메일을 서버가 제공하는 보관 편지함으로 이동함",
-      inputSchema: z.object({
-        mailbox: mailboxSchema,
-        uid: uidSchema
-      }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false
-      }
-    },
-    async ({ mailbox, uid }) => safeTool(() => emailReader.archiveEmail(mailbox, uid))
-  );
-
   return server;
 }
 

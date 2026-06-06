@@ -37,12 +37,6 @@ const emailReader: EmailReader = {
     sourceUid: uid,
     destinationMailbox,
     destinationUid: null
-  })),
-  archiveEmail: vi.fn(async (mailbox, uid) => ({
-    sourceMailbox: mailbox,
-    sourceUid: uid,
-    destinationMailbox: "Archive",
-    destinationUid: null
   }))
 };
 

@@ -11,12 +11,6 @@ const mailboxes = [
     subscribed: true
   },
   {
-    path: "Archive",
-    name: "Archive",
-    specialUse: "\\Archive",
-    subscribed: true
-  },
-  {
     path: "Target",
     name: "Target",
     subscribed: true
@@ -60,37 +54,6 @@ describe("IMAP 이메일 상태 관리", () => {
       destinationUid: 84
     });
     expect(fake.messageMove).toHaveBeenCalledWith(42, "Target", { uid: true });
-  });
-
-  it("Archive 특수 편지함으로 보관함", async () => {
-    const fake = createFakeClient();
-    const reader = createReader(fake.client);
-
-    await reader.archiveEmail("INBOX", 42);
-
-    expect(fake.messageMove).toHaveBeenCalledWith(42, "Archive", { uid: true });
-  });
-
-  it("Archive 특수 편지함을 하나로 결정할 수 없으면 보관을 거부함", async () => {
-    const missing = createFakeClient(
-      mailboxes.filter((mailbox) => mailbox.specialUse !== "\\Archive")
-    );
-    const duplicate = createFakeClient([
-      ...mailboxes,
-      {
-        path: "OtherArchive",
-        name: "OtherArchive",
-        specialUse: "\\Archive",
-        subscribed: true
-      }
-    ]);
-
-    await expect(createReader(missing.client).archiveEmail("INBOX", 42)).rejects.toThrow(
-      "보관 편지함을 하나로 결정할 수 없음"
-    );
-    await expect(createReader(duplicate.client).archiveEmail("INBOX", 42)).rejects.toThrow(
-      "보관 편지함을 하나로 결정할 수 없음"
-    );
   });
 
   it("휴지통, 같은 편지함, 존재하지 않는 편지함으로 이동을 거부함", async () => {

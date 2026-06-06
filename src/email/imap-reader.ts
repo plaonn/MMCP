@@ -169,20 +169,6 @@ export class ImapEmailReader implements EmailReader {
     });
   }
 
-  async archiveEmail(mailbox: string, uid: number): Promise<MoveEmailResult> {
-    return this.withClient(async (client) => {
-      const archiveMailboxes = (await client.list()).filter(
-        (candidate) => candidate.specialUse === "\\Archive"
-      );
-      if (archiveMailboxes.length !== 1) {
-        throw new Error("보관 편지함을 하나로 결정할 수 없음");
-      }
-
-      const archiveMailbox = archiveMailboxes[0]!;
-      return this.moveEmailWithClient(client, mailbox, uid, archiveMailbox.path);
-    });
-  }
-
   private async moveEmailWithClient(
     client: ImapFlow,
     mailbox: string,

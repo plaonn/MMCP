@@ -58,17 +58,11 @@ const emailReader: EmailReader = {
     sourceUid: uid,
     destinationMailbox,
     destinationUid: 84
-  })),
-  archiveEmail: vi.fn(async (mailbox, uid) => ({
-    sourceMailbox: mailbox,
-    sourceUid: uid,
-    destinationMailbox: "Archive",
-    destinationUid: 84
   }))
 };
 
 describe("MCP tools", () => {
-  it("조회 및 상태 관리 도구 일곱 개를 제공함", async () => {
+  it("조회 및 상태 관리 도구 여섯 개를 제공함", async () => {
     await withClient(async (client) => {
       const result = await client.listTools();
 
@@ -76,7 +70,6 @@ describe("MCP tools", () => {
         "check_connection",
         "get_email",
         "list_mailboxes",
-        "archive_email",
         "move_email",
         "set_email_read_status",
         "search_emails"
@@ -131,7 +124,7 @@ describe("MCP tools", () => {
     });
   });
 
-  it("이동 및 보관 입력을 email reader에 전달함", async () => {
+  it("이동 입력을 email reader에 전달함", async () => {
     await withClient(async (client) => {
       await client.callTool({
         name: "move_email",
@@ -141,16 +134,7 @@ describe("MCP tools", () => {
           destinationMailbox: "Target"
         }
       });
-      await client.callTool({
-        name: "archive_email",
-        arguments: {
-          mailbox: "INBOX",
-          uid: 43
-        }
-      });
-
       expect(emailReader.moveEmail).toHaveBeenCalledWith("INBOX", 42, "Target");
-      expect(emailReader.archiveEmail).toHaveBeenCalledWith("INBOX", 43);
     });
   });
 });
