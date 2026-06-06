@@ -1,0 +1,27 @@
+import { describe, expect, it } from "vitest";
+
+import { addTopLevelToolSecuritySchemes } from "../src/tool-security.js";
+
+describe("tool security compatibility", () => {
+  it("tools/list 응답에 top-level OAuth security scheme를 추가함", () => {
+    const message = {
+      jsonrpc: "2.0" as const,
+      id: 1,
+      result: {
+        tools: [
+          { name: "search_emails", inputSchema: { type: "object" } },
+          { name: "move_email", inputSchema: { type: "object" } }
+        ]
+      }
+    };
+
+    expect(addTopLevelToolSecuritySchemes(message)).toMatchObject({
+      result: {
+        tools: [
+          { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
+          { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] }
+        ]
+      }
+    });
+  });
+});

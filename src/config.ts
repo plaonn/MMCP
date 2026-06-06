@@ -3,7 +3,9 @@ import { z } from "zod";
 const environmentSchema = z.object({
   MMCP_HOST: z.string().min(1).default("127.0.0.1"),
   MMCP_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  MMCP_BEARER_TOKEN: z.string().min(24),
+  MMCP_PUBLIC_URL: z.url(),
+  MMCP_OAUTH_OWNER_PASSWORD: z.string().min(16),
+  MMCP_OAUTH_SIGNING_SECRET: z.string().min(32),
   IMAP_HOST: z.string().min(1).default("imap.naver.com"),
   IMAP_PORT: z.coerce.number().int().min(1).max(65535).default(993),
   IMAP_SECURE: z
@@ -23,7 +25,11 @@ const environmentSchema = z.object({
 export type Config = {
   host: string;
   port: number;
-  bearerToken: string;
+  publicUrl: URL;
+  oauth: {
+    ownerPassword: string;
+    signingSecret: string;
+  };
   imap: {
     host: string;
     port: number;
@@ -48,7 +54,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
   return {
     host: parsed.data.MMCP_HOST,
     port: parsed.data.MMCP_PORT,
-    bearerToken: parsed.data.MMCP_BEARER_TOKEN,
+    publicUrl: new URL(parsed.data.MMCP_PUBLIC_URL),
+    oauth: {
+      ownerPassword: parsed.data.MMCP_OAUTH_OWNER_PASSWORD,
+      signingSecret: parsed.data.MMCP_OAUTH_SIGNING_SECRET
+    },
     imap: {
       host: parsed.data.IMAP_HOST,
       port: parsed.data.IMAP_PORT,

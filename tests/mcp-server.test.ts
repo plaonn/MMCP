@@ -6,10 +6,7 @@ import type { EmailReader } from "../src/email/types.js";
 import { createMcpServer } from "../src/mcp-server.js";
 
 const emailReader: EmailReader = {
-  checkConnection: vi.fn(async () => ({
-    connected: true as const,
-    user: "user@naver.com"
-  })),
+  checkConnection: vi.fn(async () => ({ connected: true as const })),
   listMailboxes: vi.fn(async () => [
     {
       path: "INBOX",
@@ -80,6 +77,15 @@ describe("MCP tools", () => {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true
+      });
+      expect(result.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
+      expect(result.tools.find((tool) => tool.name === "search_emails")?._meta).toEqual({
+        securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
+      });
+      expect(
+        result.tools.find((tool) => tool.name === "set_email_read_status")?._meta
+      ).toEqual({
+        securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }]
       });
     });
   });

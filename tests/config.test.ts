@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 
 const validEnvironment = {
-  MMCP_BEARER_TOKEN: "a".repeat(24),
+  MMCP_PUBLIC_URL: "https://mail.example.com/mcp",
+  MMCP_OAUTH_OWNER_PASSWORD: "p".repeat(16),
+  MMCP_OAUTH_SIGNING_SECRET: "s".repeat(32),
   IMAP_USER: "user@naver.com",
   IMAP_PASSWORD: "application-password"
 };
@@ -20,6 +22,7 @@ describe("loadConfig", () => {
       password: "application-password"
     });
     expect(config.maxEmailBytes).toBe(5 * 1024 * 1024);
+    expect(config.publicUrl.href).toBe("https://mail.example.com/mcp");
   });
 
   it("필수 비밀값이 없으면 오류를 발생시킴", () => {

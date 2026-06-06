@@ -58,7 +58,7 @@ export type MoveEmailResult = {
 };
 
 export interface EmailReader {
-  checkConnection(): Promise<{ connected: true; user: string }>;
+  checkConnection(): Promise<{ connected: true }>;
   listMailboxes(): Promise<Mailbox[]>;
   searchEmails(input: SearchEmailsInput): Promise<EmailSummary[]>;
   getEmail(mailbox: string, uid: number): Promise<EmailDetail>;

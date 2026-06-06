@@ -2,11 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { EmailReader } from "./email/types.js";
+import { securitySchemes } from "./tool-security.js";
 
 const mailboxSchema = z.string().min(1).max(512);
 const uidSchema = z.number().int().positive();
+const toolOutputSchema = z.object({ result: z.unknown() });
 
-export function createMcpServer(emailReader: EmailReader): McpServer {
+export function createMcpServer(
+  emailReader: EmailReader,
+  options: { grantedScopes?: string[] } = {}
+): McpServer {
   const server = new McpServer({
     name: "mmcp",
     version: "0.1.0"
@@ -21,9 +26,11 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
       title: "메일 연결 확인",
       description: "IMAP 서버에 연결하여 현재 계정의 연결 상태를 확인함",
       inputSchema: z.object({}),
-      annotations: { readOnlyHint: true }
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
     },
-    async () => safeTool(() => emailReader.checkConnection())
+    async (extra) => withScope(options, extra, "mail.read", () => emailReader.checkConnection())
   );
 
   server.registerTool(
@@ -32,9 +39,11 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
       title: "편지함 목록 조회",
       description: "현재 계정에서 사용할 수 있는 IMAP 편지함 목록을 조회함",
       inputSchema: z.object({}),
-      annotations: { readOnlyHint: true }
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
     },
-    async () => safeTool(() => emailReader.listMailboxes())
+    async (extra) => withScope(options, extra, "mail.read", () => emailReader.listMailboxes())
   );
 
   server.registerTool(
@@ -54,9 +63,11 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
         unread: z.boolean().optional(),
         limit: z.number().int().min(1).max(100).default(20)
       }),
-      annotations: { readOnlyHint: true }
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
     },
-    async (input) => safeTool(() => emailReader.searchEmails(input))
+    async (input, extra) => withScope(options, extra, "mail.read", () => emailReader.searchEmails(input))
   );
 
   server.registerTool(
@@ -69,9 +80,12 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
         mailbox: mailboxSchema,
         uid: uidSchema
       }),
-      annotations: { readOnlyHint: true }
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
     },
-    async ({ mailbox, uid }) => safeTool(() => emailReader.getEmail(mailbox, uid))
+    async ({ mailbox, uid }, extra) =>
+      withScope(options, extra, "mail.read", () => emailReader.getEmail(mailbox, uid))
   );
 
   server.registerTool(
@@ -85,14 +99,18 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
         uid: uidSchema,
         read: z.boolean()
       }),
+      outputSchema: toolOutputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true
-      }
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ mailbox, uid, read }) =>
-      safeTool(() => emailReader.setEmailReadStatus(mailbox, uid, read))
+    async ({ mailbox, uid, read }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        emailReader.setEmailReadStatus(mailbox, uid, read)
+      )
   );
 
   server.registerTool(
@@ -106,17 +124,36 @@ export function createMcpServer(emailReader: EmailReader): McpServer {
         uid: uidSchema,
         destinationMailbox: mailboxSchema
       }),
+      outputSchema: toolOutputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false
-      }
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ mailbox, uid, destinationMailbox }) =>
-      safeTool(() => emailReader.moveEmail(mailbox, uid, destinationMailbox))
+    async ({ mailbox, uid, destinationMailbox }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        emailReader.moveEmail(mailbox, uid, destinationMailbox)
+      )
   );
 
   return server;
+}
+
+async function withScope(
+  options: { grantedScopes?: string[] },
+  _extra: { authInfo?: { scopes: string[] } },
+  scope: string,
+  operation: () => Promise<unknown>
+) {
+  if (options.grantedScopes && !options.grantedScopes.includes(scope)) {
+    return {
+      isError: true,
+      content: [{ type: "text" as const, text: `이 도구는 ${scope} 권한이 필요함.` }]
+    };
+  }
+  return safeTool(operation);
 }
 
 function toolResult(value: unknown) {

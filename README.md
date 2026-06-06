@@ -19,8 +19,9 @@ npm install
 cp .env.example .env
 ```
 
-`.env`에 네이버 이메일 주소, 애플리케이션 비밀번호, 충분히 긴 무작위
-`MMCP_BEARER_TOKEN`을 설정함. 실제 비밀값이 들어간 `.env`는 Git에서 제외됨.
+`.env`에 공개 HTTPS MCP URL, OAuth 소유자 비밀번호와 서명 비밀값, 네이버
+이메일 주소 및 애플리케이션 비밀번호를 설정함. 실제 비밀값이 들어간 `.env`는
+Git에서 제외됨.
 
 네이버 연결만 안전하게 확인하려면 다음 명령을 실행함. 이메일 주소, 편지함
 이름, 메일 내용은 출력하지 않음.
@@ -34,9 +35,10 @@ npm run build
 npm start
 ```
 
-기본 MCP 접속 주소는 `http://127.0.0.1:3000/mcp`임. 현재 서버는 개발용 bearer
-token 인증을 사용함. 외부 연결 전에는 HTTPS 종료 구성이 필요하며, ChatGPT
-연결에 필요한 최종 인증 방식은 별도로 검증해야 함.
+기본 로컬 수신 주소는 `http://127.0.0.1:3000/mcp`임. MCP client에는
+`MMCP_PUBLIC_URL`에 설정한 공개 HTTPS 주소를 등록함. 서버는 OAuth 2.1
+authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
+`MMCP_OAUTH_OWNER_PASSWORD`를 입력해야 함.
 
 ## MCP 도구
 

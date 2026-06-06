@@ -25,10 +25,9 @@ export type ImapReaderOptions = {
 export class ImapEmailReader implements EmailReader {
   constructor(private readonly options: ImapReaderOptions) {}
 
-  async checkConnection(): Promise<{ connected: true; user: string }> {
+  async checkConnection(): Promise<{ connected: true }> {
     return this.withClient(async () => ({
-      connected: true,
-      user: this.options.user
+      connected: true
     }));
   }
 
