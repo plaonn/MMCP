@@ -27,18 +27,52 @@ const config: Config = {
 
 const emailReader: EmailReader = {
   checkConnection: vi.fn(async () => ({ connected: true as const })),
+  getServerCapabilities: vi.fn(async () => ({
+    capabilities: [],
+    specialUses: [],
+    features: { idle: false, move: false, quota: false, sort: false, thread: false }
+  })),
+  getQuota: vi.fn(async (mailbox) => ({ supported: false, mailbox })),
   listMailboxes: vi.fn(async () => []),
   searchEmails: vi.fn(async () => []),
   getEmail: vi.fn(async () => {
     throw new Error("사용하지 않음");
   }),
+  getEmailHeaders: vi.fn(async (mailbox, uid) => ({ mailbox, uid, headers: "" })),
+  getEmailSource: vi.fn(async (mailbox, uid) => ({ mailbox, uid, source: "" })),
   setEmailReadStatus: vi.fn(async (mailbox, uid, read) => ({ mailbox, uid, read })),
+  setEmailFlaggedStatus: vi.fn(async (mailbox, uid, flagged) => ({
+    mailbox,
+    uid,
+    flagged
+  })),
+  copyEmail: vi.fn(async (mailbox, uid, destinationMailbox) => ({
+    sourceMailbox: mailbox,
+    sourceUid: uid,
+    destinationMailbox,
+    destinationUid: null
+  })),
   moveEmail: vi.fn(async (mailbox, uid, destinationMailbox) => ({
     sourceMailbox: mailbox,
     sourceUid: uid,
     destinationMailbox,
     destinationUid: null
-  }))
+  })),
+  trashEmail: vi.fn(async (mailbox, uid) => ({
+    sourceMailbox: mailbox,
+    sourceUid: uid,
+    destinationMailbox: "Trash",
+    destinationUid: null
+  })),
+  markEmailAsSpam: vi.fn(async (mailbox, uid) => ({
+    sourceMailbox: mailbox,
+    sourceUid: uid,
+    destinationMailbox: "Spam",
+    destinationUid: null
+  })),
+  createMailbox: vi.fn(async (path) => ({ path, created: true })),
+  renameMailbox: vi.fn(async (path, newPath) => ({ path, newPath })),
+  setMailboxSubscription: vi.fn(async (path, subscribed) => ({ path, subscribed }))
 };
 
 const servers: Array<ReturnType<ReturnType<typeof createApp>["listen"]>> = [];

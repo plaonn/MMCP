@@ -3,13 +3,22 @@ import { simpleParser, type AddressObject, type Attachment } from "mailparser";
 
 import type {
   AttachmentMetadata,
+  CopyEmailResult,
   EmailDetail,
+  EmailHeaders,
   EmailReader,
+  EmailSource,
   EmailSummary,
+  FlaggedStatusResult,
   Mailbox,
+  MailboxCreateResult,
+  MailboxRenameResult,
+  MailboxSubscriptionResult,
   MoveEmailResult,
+  QuotaResult,
   ReadStatusResult,
-  SearchEmailsInput
+  SearchEmailsInput,
+  ServerCapabilities
 } from "./types.js";
 
 export type ImapReaderOptions = {
@@ -29,6 +38,54 @@ export class ImapEmailReader implements EmailReader {
     return this.withClient(async () => ({
       connected: true
     }));
+  }
+
+  async getServerCapabilities(): Promise<ServerCapabilities> {
+    return this.withClient(async (client) => {
+      const mailboxes = await client.list();
+      const capabilities = [...client.capabilities.keys()].sort();
+      const has = (capability: string) => client.capabilities.has(capability);
+      return {
+        capabilities,
+        specialUses: [...new Set(
+          mailboxes.map((mailbox) => mailbox.specialUse).filter((value): value is string => Boolean(value))
+        )].sort(),
+        features: {
+          idle: has("IDLE"),
+          move: has("MOVE"),
+          quota: has("QUOTA"),
+          sort: has("SORT"),
+          thread: [...client.capabilities.keys()].some((capability) =>
+            capability.startsWith("THREAD=")
+          )
+        }
+      };
+    });
+  }
+
+  async getQuota(mailbox: string): Promise<QuotaResult> {
+    return this.withClient(async (client) => {
+      const quota = await client.getQuota(mailbox);
+      if (!quota) {
+        return { supported: false, mailbox };
+      }
+      const storage = quota.storage;
+      return {
+        supported: true,
+        mailbox,
+        ...(storage && typeof storage.used === "number" && typeof storage.limit === "number"
+          ? {
+              storage: {
+                used: storage.used,
+                limit: storage.limit,
+                percent: storage.limit > 0
+                  ? Math.round((storage.used / storage.limit) * 10_000) / 100
+                  : 0
+              }
+            }
+          : {})
+      };
+    });
   }
 
   async listMailboxes(): Promise<Mailbox[]> {
@@ -134,6 +191,49 @@ export class ImapEmailReader implements EmailReader {
     });
   }
 
+  async getEmailHeaders(mailbox: string, uid: number): Promise<EmailHeaders> {
+    return this.withClient(async (client) => {
+      const lock = await client.getMailboxLock(mailbox);
+      try {
+        const message = await client.fetchOne(uid, { uid: true, headers: true }, { uid: true });
+        if (!message || !message.headers) {
+          throw new Error("이메일 헤더를 가져올 수 없음");
+        }
+        if (message.headers.length > this.options.maxEmailBytes) {
+          throw new Error("이메일 헤더 크기가 조회 제한을 초과함");
+        }
+        return { mailbox, uid, headers: message.headers.toString("utf8") };
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async getEmailSource(mailbox: string, uid: number): Promise<EmailSource> {
+    return this.withClient(async (client) => {
+      const lock = await client.getMailboxLock(mailbox);
+      try {
+        const metadata = await client.fetchOne(uid, { uid: true, size: true }, { uid: true });
+        if (!metadata) {
+          throw new Error("요청한 이메일을 찾을 수 없음");
+        }
+        if ((metadata.size ?? 0) > this.options.maxEmailBytes) {
+          throw new Error("이메일 원본 크기가 조회 제한을 초과함");
+        }
+        const message = await client.fetchOne(uid, { uid: true, source: true }, { uid: true });
+        if (!message || !message.source) {
+          throw new Error("이메일 원본을 가져올 수 없음");
+        }
+        if (message.source.length > this.options.maxEmailBytes) {
+          throw new Error("이메일 원본 크기가 조회 제한을 초과함");
+        }
+        return { mailbox, uid, source: message.source.toString("utf8") };
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
   async setEmailReadStatus(
     mailbox: string,
     uid: number,
@@ -158,13 +258,136 @@ export class ImapEmailReader implements EmailReader {
     });
   }
 
+  async setEmailFlaggedStatus(
+    mailbox: string,
+    uid: number,
+    flagged: boolean
+  ): Promise<FlaggedStatusResult> {
+    return this.withClient(async (client) => {
+      const lock = await client.getMailboxLock(mailbox);
+      try {
+        await assertMessageExists(client, uid);
+        const changed = flagged
+          ? await client.messageFlagsAdd(uid, ["\\Flagged"], { uid: true })
+          : await client.messageFlagsRemove(uid, ["\\Flagged"], { uid: true });
+        if (!changed) {
+          throw new Error("이메일 별표 상태를 변경할 수 없음");
+        }
+        return { mailbox, uid, flagged };
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async copyEmail(
+    mailbox: string,
+    uid: number,
+    destinationMailbox: string
+  ): Promise<CopyEmailResult> {
+    return this.withClient(async (client) => {
+      await assertDestinationMailbox(client, destinationMailbox);
+      const lock = await client.getMailboxLock(mailbox);
+      try {
+        await assertMessageExists(client, uid);
+        const copied = await client.messageCopy(uid, destinationMailbox, { uid: true });
+        if (!copied) {
+          throw new Error("이메일을 복사할 수 없음");
+        }
+        return {
+          sourceMailbox: mailbox,
+          sourceUid: uid,
+          destinationMailbox,
+          destinationUid: copied.uidMap?.get(uid) ?? null
+        };
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
   async moveEmail(
     mailbox: string,
     uid: number,
     destinationMailbox: string
   ): Promise<MoveEmailResult> {
     return this.withClient(async (client) => {
+      const destination = await assertDestinationMailbox(client, destinationMailbox);
+      if (destination.specialUse === "\\Trash" || destination.specialUse === "\\Junk") {
+        throw new Error("휴지통과 스팸 편지함은 전용 도구로만 이동할 수 있음");
+      }
       return this.moveEmailWithClient(client, mailbox, uid, destinationMailbox);
+    });
+  }
+
+  async trashEmail(mailbox: string, uid: number): Promise<MoveEmailResult> {
+    return this.moveEmailToSpecialUse(mailbox, uid, "\\Trash");
+  }
+
+  async markEmailAsSpam(mailbox: string, uid: number): Promise<MoveEmailResult> {
+    return this.moveEmailToSpecialUse(mailbox, uid, "\\Junk");
+  }
+
+  async createMailbox(path: string): Promise<MailboxCreateResult> {
+    return this.withClient(async (client) => {
+      const result = await client.mailboxCreate(path);
+      if (!result) {
+        throw new Error("편지함을 생성할 수 없음");
+      }
+      return { path: result.path, created: result.created };
+    });
+  }
+
+  async renameMailbox(path: string, newPath: string): Promise<MailboxRenameResult> {
+    return this.withClient(async (client) => {
+      const mailboxes = await client.list();
+      const source = mailboxes.find((mailbox) => mailbox.path === path);
+      if (!source) {
+        throw new Error("편지함을 찾을 수 없음");
+      }
+      if (source.specialUse || source.path.toUpperCase() === "INBOX") {
+        throw new Error("특수 편지함 이름은 변경할 수 없음");
+      }
+      if (mailboxes.some((mailbox) => mailbox.path === newPath)) {
+        throw new Error("새 이름의 편지함이 이미 존재함");
+      }
+      const result = await client.mailboxRename(path, newPath);
+      if (!result) {
+        throw new Error("편지함 이름을 변경할 수 없음");
+      }
+      return { path: result.path, newPath: result.newPath };
+    });
+  }
+
+  async setMailboxSubscription(
+    path: string,
+    subscribed: boolean
+  ): Promise<MailboxSubscriptionResult> {
+    return this.withClient(async (client) => {
+      await assertDestinationMailbox(client, path);
+      const changed = subscribed
+        ? await client.mailboxSubscribe(path)
+        : await client.mailboxUnsubscribe(path);
+      if (!changed) {
+        throw new Error("편지함 구독 상태를 변경할 수 없음");
+      }
+      return { path, subscribed };
+    });
+  }
+
+  private async moveEmailToSpecialUse(
+    mailbox: string,
+    uid: number,
+    specialUse: "\\Trash" | "\\Junk"
+  ): Promise<MoveEmailResult> {
+    return this.withClient(async (client) => {
+      const destination = (await client.list()).find(
+        (candidate) => candidate.specialUse === specialUse
+      );
+      if (!destination) {
+        throw new Error("요청한 특수 편지함을 찾을 수 없음");
+      }
+      return this.moveEmailWithClient(client, mailbox, uid, destination.path);
     });
   }
 
@@ -176,16 +399,6 @@ export class ImapEmailReader implements EmailReader {
   ): Promise<MoveEmailResult> {
     if (mailbox === destinationMailbox) {
       throw new Error("같은 편지함으로 이동할 수 없음");
-    }
-
-    const destination = (await client.list()).find(
-      (candidate) => candidate.path === destinationMailbox
-    );
-    if (!destination) {
-      throw new Error("대상 편지함을 찾을 수 없음");
-    }
-    if (destination.specialUse === "\\Trash") {
-      throw new Error("휴지통으로 이동할 수 없음");
     }
 
     const lock = await client.getMailboxLock(mailbox);
@@ -239,6 +452,14 @@ async function assertMessageExists(client: ImapFlow, uid: number): Promise<void>
   if (!message) {
     throw new Error("요청한 이메일을 찾을 수 없음");
   }
+}
+
+async function assertDestinationMailbox(client: ImapFlow, path: string): Promise<ListResponse> {
+  const destination = (await client.list()).find((candidate) => candidate.path === path);
+  if (!destination) {
+    throw new Error("대상 편지함을 찾을 수 없음");
+  }
+  return destination;
 }
 
 function buildSearchCriteria(input: SearchEmailsInput): Record<string, unknown> {

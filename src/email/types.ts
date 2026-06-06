@@ -57,11 +57,92 @@ export type MoveEmailResult = {
   destinationUid: number | null;
 };
 
+export type ServerCapabilities = {
+  capabilities: string[];
+  specialUses: string[];
+  features: {
+    idle: boolean;
+    move: boolean;
+    quota: boolean;
+    sort: boolean;
+    thread: boolean;
+  };
+};
+
+export type QuotaResult = {
+  supported: boolean;
+  mailbox: string;
+  storage?: {
+    used: number;
+    limit: number;
+    percent: number;
+  };
+};
+
+export type EmailHeaders = {
+  mailbox: string;
+  uid: number;
+  headers: string;
+};
+
+export type EmailSource = {
+  mailbox: string;
+  uid: number;
+  source: string;
+};
+
+export type FlaggedStatusResult = {
+  mailbox: string;
+  uid: number;
+  flagged: boolean;
+};
+
+export type CopyEmailResult = {
+  sourceMailbox: string;
+  sourceUid: number;
+  destinationMailbox: string;
+  destinationUid: number | null;
+};
+
+export type MailboxCreateResult = {
+  path: string;
+  created: boolean;
+};
+
+export type MailboxRenameResult = {
+  path: string;
+  newPath: string;
+};
+
+export type MailboxSubscriptionResult = {
+  path: string;
+  subscribed: boolean;
+};
+
 export interface EmailReader {
   checkConnection(): Promise<{ connected: true }>;
+  getServerCapabilities(): Promise<ServerCapabilities>;
+  getQuota(mailbox: string): Promise<QuotaResult>;
   listMailboxes(): Promise<Mailbox[]>;
   searchEmails(input: SearchEmailsInput): Promise<EmailSummary[]>;
   getEmail(mailbox: string, uid: number): Promise<EmailDetail>;
+  getEmailHeaders(mailbox: string, uid: number): Promise<EmailHeaders>;
+  getEmailSource(mailbox: string, uid: number): Promise<EmailSource>;
   setEmailReadStatus(mailbox: string, uid: number, read: boolean): Promise<ReadStatusResult>;
+  setEmailFlaggedStatus(
+    mailbox: string,
+    uid: number,
+    flagged: boolean
+  ): Promise<FlaggedStatusResult>;
+  copyEmail(
+    mailbox: string,
+    uid: number,
+    destinationMailbox: string
+  ): Promise<CopyEmailResult>;
   moveEmail(mailbox: string, uid: number, destinationMailbox: string): Promise<MoveEmailResult>;
+  trashEmail(mailbox: string, uid: number): Promise<MoveEmailResult>;
+  markEmailAsSpam(mailbox: string, uid: number): Promise<MoveEmailResult>;
+  createMailbox(path: string): Promise<MailboxCreateResult>;
+  renameMailbox(path: string, newPath: string): Promise<MailboxRenameResult>;
+  setMailboxSubscription(path: string, subscribed: boolean): Promise<MailboxSubscriptionResult>;
 }
