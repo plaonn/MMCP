@@ -18,7 +18,37 @@ MMCP
 Caddy는 외부 `mac.plaonn.com` 요청만 받은 뒤 upstream `Host`를
 `127.0.0.1`로 변경함. MMCP는 localhost DNS rebinding 보호를 유지함.
 
-## Caddy 실행
+## macOS 자동 시작
+
+`launchd` 사용자 서비스는 로그인 시 MMCP와 Caddy를 시작하고, 프로세스가
+비정상 종료되면 다시 시작함. 설치 전에 수동으로 실행 중인 MMCP와 Caddy를
+종료해야 함.
+
+```bash
+./deploy/install-macos-services.sh
+```
+
+설치 스크립트는 현재 저장소, Node.js, Caddy 경로로 LaunchAgent 설정을 생성하고
+빌드 및 Caddy 설정 검증 후 등록함. Caddy access log와 애플리케이션 영구 log
+파일은 기본적으로 생성하지 않음.
+
+서비스 상태는 다음 명령으로 확인함.
+
+```bash
+launchctl print gui/$(id -u)/com.plaonn.mmcp
+launchctl print gui/$(id -u)/com.plaonn.mmcp.caddy
+```
+
+강제 종료 또는 비정상 종료 후에는 `launchd` 재시작 간격 때문에 endpoint
+복구까지 약 10초가 걸릴 수 있음.
+
+서비스 제거:
+
+```bash
+./deploy/uninstall-macos-services.sh
+```
+
+## 수동 실행
 
 저장소 루트에서 다음 명령으로 설정을 검증함.
 

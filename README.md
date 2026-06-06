@@ -65,4 +65,5 @@ npm run build
 - [`docs/ROADMAP.md`](docs/ROADMAP.md): 장기 계획과 예상 개발 순서
 - [`work/`](work/): 현재 논의하거나 구현 중인 작업 항목
 - [`docs/decisions/`](docs/decisions/): 장기간 보존할 설계 결정
+- [`deploy/README.md`](deploy/README.md): HTTPS 및 macOS 자동 시작 배포 절차
 - [`AGENTS.md`](AGENTS.md): 필수 개발 및 문서 관리 절차
