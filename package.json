@@ -11,7 +11,7 @@
     "check:imap": "npm run build --silent && node dist/check-imap.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "test": "vitest run --exclude dist/**",
+    "test": "vitest run --exclude 'dist/**'",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

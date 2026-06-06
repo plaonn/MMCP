@@ -287,7 +287,7 @@ function mapSummary(mailbox: string, message: FetchMessageObject): EmailSummary 
     subject: message.envelope?.subject ?? null,
     from: addressesToStrings(message.envelope?.from),
     to: addressesToStrings(message.envelope?.to),
-    date: message.envelope?.date?.toISOString() ?? null,
+    date: formatDate(message.envelope?.date),
     size: message.size ?? 0,
     flags: [...(message.flags ?? [])].sort(),
     hasAttachments: bodyStructureHasAttachment(message.bodyStructure)
@@ -334,4 +334,10 @@ function mapAttachment(attachment: Attachment): AttachmentMetadata {
 
 function normalizeText(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
+}
+
+function formatDate(value: unknown): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
