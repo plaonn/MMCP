@@ -7,16 +7,19 @@ import type {
   EmailReader,
   EmailSummary,
   Mailbox,
+  MoveEmailResult,
+  ReadStatusResult,
   SearchEmailsInput
 } from "./types.js";
 
-type ImapReaderOptions = {
+export type ImapReaderOptions = {
   host: string;
   port: number;
   secure: boolean;
   user: string;
   password: string;
   maxEmailBytes: number;
+  createClient?: () => ImapFlow;
 };
 
 export class ImapEmailReader implements EmailReader {
@@ -38,7 +41,7 @@ export class ImapEmailReader implements EmailReader {
 
   async searchEmails(input: SearchEmailsInput): Promise<EmailSummary[]> {
     return this.withClient(async (client) => {
-        const lock = await client.getMailboxLock(input.mailbox);
+      const lock = await client.getMailboxLock(input.mailbox);
       try {
         const criteria = buildSearchCriteria(input);
         const matched = await client.search(criteria, { uid: true });
@@ -132,17 +135,106 @@ export class ImapEmailReader implements EmailReader {
     });
   }
 
-  private async withClient<T>(operation: (client: ImapFlow) => Promise<T>): Promise<T> {
-    const client = new ImapFlow({
-      host: this.options.host,
-      port: this.options.port,
-      secure: this.options.secure,
-      auth: {
-        user: this.options.user,
-        pass: this.options.password
-      },
-      logger: false
+  async setEmailReadStatus(
+    mailbox: string,
+    uid: number,
+    read: boolean
+  ): Promise<ReadStatusResult> {
+    return this.withClient(async (client) => {
+      const lock = await client.getMailboxLock(mailbox);
+      try {
+        await assertMessageExists(client, uid);
+        const changed = read
+          ? await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true })
+          : await client.messageFlagsRemove(uid, ["\\Seen"], { uid: true });
+
+        if (!changed) {
+          throw new Error("이메일 읽음 상태를 변경할 수 없음");
+        }
+
+        return { mailbox, uid, read };
+      } finally {
+        lock.release();
+      }
     });
+  }
+
+  async moveEmail(
+    mailbox: string,
+    uid: number,
+    destinationMailbox: string
+  ): Promise<MoveEmailResult> {
+    return this.withClient(async (client) => {
+      return this.moveEmailWithClient(client, mailbox, uid, destinationMailbox);
+    });
+  }
+
+  async archiveEmail(mailbox: string, uid: number): Promise<MoveEmailResult> {
+    return this.withClient(async (client) => {
+      const archiveMailboxes = (await client.list()).filter(
+        (candidate) => candidate.specialUse === "\\Archive"
+      );
+      if (archiveMailboxes.length !== 1) {
+        throw new Error("보관 편지함을 하나로 결정할 수 없음");
+      }
+
+      const archiveMailbox = archiveMailboxes[0]!;
+      return this.moveEmailWithClient(client, mailbox, uid, archiveMailbox.path);
+    });
+  }
+
+  private async moveEmailWithClient(
+    client: ImapFlow,
+    mailbox: string,
+    uid: number,
+    destinationMailbox: string
+  ): Promise<MoveEmailResult> {
+    if (mailbox === destinationMailbox) {
+      throw new Error("같은 편지함으로 이동할 수 없음");
+    }
+
+    const destination = (await client.list()).find(
+      (candidate) => candidate.path === destinationMailbox
+    );
+    if (!destination) {
+      throw new Error("대상 편지함을 찾을 수 없음");
+    }
+    if (destination.specialUse === "\\Trash") {
+      throw new Error("휴지통으로 이동할 수 없음");
+    }
+
+    const lock = await client.getMailboxLock(mailbox);
+    try {
+      await assertMessageExists(client, uid);
+      const moved = await client.messageMove(uid, destinationMailbox, { uid: true });
+      if (!moved) {
+        throw new Error("이메일을 이동할 수 없음");
+      }
+
+      return {
+        sourceMailbox: mailbox,
+        sourceUid: uid,
+        destinationMailbox,
+        destinationUid: moved.uidMap?.get(uid) ?? null
+      };
+    } finally {
+      lock.release();
+    }
+  }
+
+  private async withClient<T>(operation: (client: ImapFlow) => Promise<T>): Promise<T> {
+    const client =
+      this.options.createClient?.() ??
+      new ImapFlow({
+        host: this.options.host,
+        port: this.options.port,
+        secure: this.options.secure,
+        auth: {
+          user: this.options.user,
+          pass: this.options.password
+        },
+        logger: false
+      });
 
     try {
       await client.connect();
@@ -154,6 +246,13 @@ export class ImapEmailReader implements EmailReader {
         client.close();
       }
     }
+  }
+}
+
+async function assertMessageExists(client: ImapFlow, uid: number): Promise<void> {
+  const message = await client.fetchOne(uid, { uid: true }, { uid: true });
+  if (!message) {
+    throw new Error("요청한 이메일을 찾을 수 없음");
   }
 }
 

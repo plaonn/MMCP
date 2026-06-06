@@ -30,7 +30,20 @@ const emailReader: EmailReader = {
   searchEmails: vi.fn(async () => []),
   getEmail: vi.fn(async () => {
     throw new Error("사용하지 않음");
-  })
+  }),
+  setEmailReadStatus: vi.fn(async (mailbox, uid, read) => ({ mailbox, uid, read })),
+  moveEmail: vi.fn(async (mailbox, uid, destinationMailbox) => ({
+    sourceMailbox: mailbox,
+    sourceUid: uid,
+    destinationMailbox,
+    destinationUid: null
+  })),
+  archiveEmail: vi.fn(async (mailbox, uid) => ({
+    sourceMailbox: mailbox,
+    sourceUid: uid,
+    destinationMailbox: "Archive",
+    destinationUid: null
+  }))
 };
 
 const servers: Array<ReturnType<ReturnType<typeof createApp>["listen"]>> = [];

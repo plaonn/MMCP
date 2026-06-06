@@ -44,9 +44,25 @@ export type SearchEmailsInput = {
   limit: number;
 };
 
+export type ReadStatusResult = {
+  mailbox: string;
+  uid: number;
+  read: boolean;
+};
+
+export type MoveEmailResult = {
+  sourceMailbox: string;
+  sourceUid: number;
+  destinationMailbox: string;
+  destinationUid: number | null;
+};
+
 export interface EmailReader {
   checkConnection(): Promise<{ connected: true; user: string }>;
   listMailboxes(): Promise<Mailbox[]>;
   searchEmails(input: SearchEmailsInput): Promise<EmailSummary[]>;
   getEmail(mailbox: string, uid: number): Promise<EmailDetail>;
+  setEmailReadStatus(mailbox: string, uid: number, read: boolean): Promise<ReadStatusResult>;
+  moveEmail(mailbox: string, uid: number, destinationMailbox: string): Promise<MoveEmailResult>;
+  archiveEmail(mailbox: string, uid: number): Promise<MoveEmailResult>;
 }
