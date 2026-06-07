@@ -62,6 +62,20 @@ describe("IMAP 이메일 상태 관리", () => {
     expect(fake.messageMove).toHaveBeenCalledWith(42, "Target", { uid: true });
   });
 
+  it("서버가 이동 성공을 반환해도 출발지에서 사라지지 않으면 실패함", async () => {
+    const fake = createFakeClient();
+    fake.messageMove.mockImplementationOnce(async (_uid: number, destination: string) => ({
+      path: "INBOX",
+      destination,
+      uidMap: new Map([[42, 84]])
+    }));
+    const reader = createReader(fake.client);
+
+    await expect(reader.moveEmail("INBOX", 42, "Target")).rejects.toThrow(
+      "이메일 이동 결과를 확인할 수 없음"
+    );
+  });
+
   it("이메일을 복사하고 새 UID를 반환함", async () => {
     const fake = createFakeClient();
     const reader = createReader(fake.client);
@@ -95,13 +109,13 @@ describe("IMAP 이메일 상태 관리", () => {
   });
 
   it("휴지통과 스팸 특수 편지함으로 이동함", async () => {
-    const fake = createFakeClient();
-    const reader = createReader(fake.client);
+    const trashReader = createReader(createFakeClient().client);
+    const spamReader = createReader(createFakeClient().client);
 
-    await expect(reader.trashEmail("INBOX", 42)).resolves.toMatchObject({
+    await expect(trashReader.trashEmail("INBOX", 42)).resolves.toMatchObject({
       destinationMailbox: "Trash"
     });
-    await expect(reader.markEmailAsSpam("INBOX", 42)).resolves.toMatchObject({
+    await expect(spamReader.markEmailAsSpam("INBOX", 42)).resolves.toMatchObject({
       destinationMailbox: "Spam"
     });
   });
@@ -171,13 +185,18 @@ function createReader(client: ImapFlow): ImapEmailReader {
 }
 
 function createFakeClient(mailboxList = mailboxes) {
+  let selectedMailbox = "";
+  const missingMessages = new Set<string>();
   const messageFlagsAdd = vi.fn(async () => true);
   const messageFlagsRemove = vi.fn(async () => true);
-  const messageMove = vi.fn(async (_uid: number, destination: string) => ({
-    path: "INBOX",
-    destination,
-    uidMap: new Map([[42, 84]])
-  }));
+  const messageMove = vi.fn(async (uid: number, destination: string) => {
+    missingMessages.add(`${selectedMailbox}\0${uid}`);
+    return {
+      path: selectedMailbox,
+      destination,
+      uidMap: new Map([[uid, 84]])
+    };
+  });
   const messageCopy = vi.fn(async (_uid: number, destination: string) => ({
     path: "INBOX",
     destination,
@@ -194,8 +213,13 @@ function createFakeClient(mailboxList = mailboxes) {
     logout: vi.fn(async () => true),
     close: vi.fn(),
     list: vi.fn(async () => mailboxList),
-    getMailboxLock: vi.fn(async () => ({ release: vi.fn() })),
-    fetchOne: vi.fn(async () => ({ uid: 42 })),
+    getMailboxLock: vi.fn(async (mailbox: string) => {
+      selectedMailbox = mailbox;
+      return { release: vi.fn() };
+    }),
+    fetchOne: vi.fn(async (uid: number) =>
+      missingMessages.has(`${selectedMailbox}\0${uid}`) ? false : { uid }
+    ),
     messageFlagsAdd,
     messageFlagsRemove,
     messageMove,

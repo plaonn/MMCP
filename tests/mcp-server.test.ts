@@ -105,35 +105,36 @@ describe("MCP tools", () => {
       expect(result.tools.map((tool) => tool.name).sort()).toEqual([
         "apply_mail_policy_patch",
         "check_connection",
-        "copy_email",
+        "copy_emails",
         "create_mailbox",
         "get_email",
         "get_email_headers",
         "get_email_source",
+        "get_bulk_operation_diagnostics",
         "get_quota",
         "get_server_capabilities",
         "get_mail_policy",
         "get_mail_policy_history",
         "list_mailboxes",
-        "mark_email_as_spam",
-        "move_email",
+        "mark_emails_as_spam",
+        "move_emails",
         "preview_mail_policy_patch",
         "rename_mailbox",
         "revert_mail_policy_revision",
-        "set_email_flagged_status",
-        "set_email_read_status",
+        "set_emails_flagged_status",
+        "set_emails_read_status",
         "set_mailbox_subscription",
         "search_emails",
-        "trash_email"
+        "trash_emails"
       ].sort());
       expect(result.tools.some((tool) => tool.name.includes("delete"))).toBe(false);
-      expect(result.tools.find((tool) => tool.name === "trash_email")?.annotations).toMatchObject({
+      expect(result.tools.find((tool) => tool.name === "trash_emails")?.annotations).toMatchObject({
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false
       });
       expect(
-        result.tools.find((tool) => tool.name === "set_email_read_status")?.annotations
+        result.tools.find((tool) => tool.name === "set_emails_read_status")?.annotations
       ).toMatchObject({
         readOnlyHint: false,
         destructiveHint: false,
@@ -144,7 +145,7 @@ describe("MCP tools", () => {
         securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
       });
       expect(
-        result.tools.find((tool) => tool.name === "set_email_read_status")?._meta
+        result.tools.find((tool) => tool.name === "set_emails_read_status")?._meta
       ).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }]
       });
@@ -173,51 +174,166 @@ describe("MCP tools", () => {
     });
   });
 
-  it("읽음 상태 변경 입력을 email reader에 전달함", async () => {
+  it("여러 읽음 상태 변경을 한 호출에서 처리하고 작업별 성공을 반환함", async () => {
     await withClient(async (client) => {
       const result = await client.callTool({
-        name: "set_email_read_status",
+        name: "set_emails_read_status",
         arguments: {
-          mailbox: "INBOX",
-          uid: 42,
-          read: true
+          operations: [
+            { id: "read-inbox", mailbox: "INBOX", uid: 42, read: true },
+            { id: "unread-other", mailbox: "Other", uid: 7, read: false }
+          ]
         }
       });
 
       expect(emailReader.setEmailReadStatus).toHaveBeenCalledWith("INBOX", 42, true);
+      expect(emailReader.setEmailReadStatus).toHaveBeenCalledWith("Other", 7, false);
       expect(result.structuredContent).toEqual({
-        result: { mailbox: "INBOX", uid: 42, read: true }
-      });
-    });
-  });
-
-  it("이동 입력을 email reader에 전달함", async () => {
-    await withClient(async (client) => {
-      await client.callTool({
-        name: "move_email",
-        arguments: {
-          mailbox: "INBOX",
-          uid: 42,
-          destinationMailbox: "Target"
+        result: {
+          attempted: 2,
+          succeeded: 2,
+          failed: 0,
+          results: [
+            { id: "read-inbox", status: "succeeded" },
+            { id: "unread-other", status: "succeeded" }
+          ]
         }
       });
-      expect(emailReader.moveEmail).toHaveBeenCalledWith("INBOX", 42, "Target");
     });
   });
 
-  it("휴지통과 스팸 처리를 별도 도구로 전달함", async () => {
+  it("여러 이동을 처리하고 개별 실패 후 다음 작업을 계속함", async () => {
+    await withClient(async (client) => {
+      vi.mocked(emailReader.moveEmail)
+        .mockRejectedValueOnce(new Error("대상 편지함을 찾을 수 없음"))
+        .mockResolvedValueOnce({
+          sourceMailbox: "Other",
+          sourceUid: 7,
+          destinationMailbox: "Target",
+          destinationUid: 9
+        });
+
+      const result = await client.callTool({
+        name: "move_emails",
+        arguments: {
+          operations: [
+            { id: "missing-target", mailbox: "INBOX", uid: 42, destinationMailbox: "Missing" },
+            { id: "move-other", mailbox: "Other", uid: 7, destinationMailbox: "Target" }
+          ]
+        }
+      });
+      expect(emailReader.moveEmail).toHaveBeenCalledWith("INBOX", 42, "Missing");
+      expect(emailReader.moveEmail).toHaveBeenCalledWith("Other", 7, "Target");
+      expect(result.structuredContent).toEqual({
+        result: {
+          attempted: 2,
+          succeeded: 1,
+          failed: 1,
+          results: [
+            {
+              id: "missing-target",
+              status: "failed",
+              code: "MAILBOX_NOT_FOUND",
+              error: "대상 편지함을 찾을 수 없음"
+            },
+            {
+              id: "move-other",
+              status: "succeeded"
+            }
+          ]
+        }
+      });
+    });
+  });
+
+  it("여러 휴지통과 스팸 처리를 별도 도구로 전달함", async () => {
     await withClient(async (client) => {
       await client.callTool({
-        name: "trash_email",
-        arguments: { mailbox: "INBOX", uid: 42 }
+        name: "trash_emails",
+        arguments: {
+          operations: [
+            { id: "trash-inbox", mailbox: "INBOX", uid: 42 },
+            { id: "trash-other", mailbox: "Other", uid: 7 }
+          ]
+        }
       });
       await client.callTool({
-        name: "mark_email_as_spam",
-        arguments: { mailbox: "INBOX", uid: 43 }
+        name: "mark_emails_as_spam",
+        arguments: { operations: [{ id: "spam-inbox", mailbox: "INBOX", uid: 43 }] }
       });
 
       expect(emailReader.trashEmail).toHaveBeenCalledWith("INBOX", 42);
+      expect(emailReader.trashEmail).toHaveBeenCalledWith("Other", 7);
       expect(emailReader.markEmailAsSpam).toHaveBeenCalledWith("INBOX", 43);
+    });
+  });
+
+  it("중복 작업 id와 동일 이메일 중복 지정을 실행 전에 거부함", async () => {
+    await withClient(async (client) => {
+      const before = vi.mocked(emailReader.setEmailReadStatus).mock.calls.length;
+      const result = await client.callTool({
+        name: "set_emails_read_status",
+        arguments: {
+          operations: [
+            { id: "duplicate", mailbox: "INBOX", uid: 42, read: true },
+            { id: "duplicate", mailbox: "INBOX", uid: 42, read: false }
+          ]
+        }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(vi.mocked(emailReader.setEmailReadStatus).mock.calls).toHaveLength(before);
+    });
+  });
+
+  it("복사는 같은 이메일을 서로 다른 목적지로 복사할 수 있음", async () => {
+    await withClient(async (client) => {
+      const result = await client.callTool({
+        name: "copy_emails",
+        arguments: {
+          operations: [
+            { id: "copy-a", mailbox: "INBOX", uid: 42, destinationMailbox: "A" },
+            { id: "copy-b", mailbox: "INBOX", uid: 42, destinationMailbox: "B" }
+          ]
+        }
+      });
+
+      expect(result.structuredContent).toMatchObject({
+        result: { attempted: 2, succeeded: 2, failed: 0 }
+      });
+    });
+  });
+
+  it("최근 벌크 작업 진단에는 개인정보 없이 실행 요약만 반환함", async () => {
+    await withClient(async (client) => {
+      await client.callTool({
+        name: "move_emails",
+        arguments: {
+          operations: [{
+            id: "diagnostic-operation",
+            mailbox: "INBOX",
+            uid: 42,
+            destinationMailbox: "Target"
+          }]
+        }
+      });
+      const diagnostics = await client.callTool({
+        name: "get_bulk_operation_diagnostics",
+        arguments: {}
+      });
+
+      const entries = (diagnostics.structuredContent as {
+        result: Array<Record<string, unknown>>;
+      }).result;
+      expect(entries).toContainEqual(expect.objectContaining({
+        tool: "move_emails",
+        phase: "completed",
+        attempted: 1,
+        succeeded: 1,
+        failed: 0
+      }));
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("INBOX");
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("diagnostic-operation");
     });
   });
 

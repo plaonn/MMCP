@@ -10,10 +10,11 @@ describe("tool security compatibility", () => {
       result: {
         tools: [
           { name: "search_emails", inputSchema: { type: "object" } },
-          { name: "move_email", inputSchema: { type: "object" } },
+          { name: "move_emails", inputSchema: { type: "object" } },
           { name: "get_server_capabilities", inputSchema: { type: "object" } },
-          { name: "trash_email", inputSchema: { type: "object" } },
+          { name: "trash_emails", inputSchema: { type: "object" } },
           { name: "get_mail_policy", inputSchema: { type: "object" } },
+          { name: "get_bulk_operation_diagnostics", inputSchema: { type: "object" } },
           { name: "apply_mail_policy_patch", inputSchema: { type: "object" } }
         ]
       }
@@ -26,6 +27,7 @@ describe("tool security compatibility", () => {
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] },
+          { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] }
         ]

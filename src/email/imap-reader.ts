@@ -401,23 +401,41 @@ export class ImapEmailReader implements EmailReader {
       throw new Error("같은 편지함으로 이동할 수 없음");
     }
 
-    const lock = await client.getMailboxLock(mailbox);
+    let destinationUid: number | null = null;
+    const sourceLock = await client.getMailboxLock(mailbox);
     try {
       await assertMessageExists(client, uid);
       const moved = await client.messageMove(uid, destinationMailbox, { uid: true });
       if (!moved) {
         throw new Error("이메일을 이동할 수 없음");
       }
-
-      return {
-        sourceMailbox: mailbox,
-        sourceUid: uid,
-        destinationMailbox,
-        destinationUid: moved.uidMap?.get(uid) ?? null
-      };
+      destinationUid = moved.uidMap?.get(uid) ?? null;
+      if (await messageExists(client, uid)) {
+        throw new Error("이메일 이동 결과를 확인할 수 없음");
+      }
     } finally {
-      lock.release();
+      sourceLock.release();
     }
+
+    if (destinationUid === null) {
+      throw new Error("이메일 이동 결과를 확인할 수 없음");
+    }
+
+    const destinationLock = await client.getMailboxLock(destinationMailbox);
+    try {
+      if (!await messageExists(client, destinationUid)) {
+        throw new Error("이메일 이동 결과를 확인할 수 없음");
+      }
+    } finally {
+      destinationLock.release();
+    }
+
+    return {
+      sourceMailbox: mailbox,
+      sourceUid: uid,
+      destinationMailbox,
+      destinationUid
+    };
   }
 
   private async withClient<T>(operation: (client: ImapFlow) => Promise<T>): Promise<T> {
@@ -448,10 +466,13 @@ export class ImapEmailReader implements EmailReader {
 }
 
 async function assertMessageExists(client: ImapFlow, uid: number): Promise<void> {
-  const message = await client.fetchOne(uid, { uid: true }, { uid: true });
-  if (!message) {
+  if (!await messageExists(client, uid)) {
     throw new Error("요청한 이메일을 찾을 수 없음");
   }
+}
+
+async function messageExists(client: ImapFlow, uid: number): Promise<boolean> {
+  return Boolean(await client.fetchOne(uid, { uid: true }, { uid: true }));
 }
 
 async function assertDestinationMailbox(client: ImapFlow, path: string): Promise<ListResponse> {
