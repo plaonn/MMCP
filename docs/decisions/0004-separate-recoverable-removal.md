@@ -18,10 +18,12 @@ annotation에 명확히 드러나지 않음.
 
 - 영구 삭제, `\Deleted` flag 설정, `EXPUNGE`, 휴지통 비우기를 제공하지 않음.
 - 내부 이메일을 영구 손실시킬 수 있는 편지함 삭제를 제공하지 않음.
-- 단일 이메일의 휴지통 이동은 `trash_email` 전용 도구로 제공하고
+- 명시적으로 지정된 이메일의 휴지통 이동은 `trash_emails` 전용 도구로
+  제공하고
   `destructiveHint`를 표시함.
-- 단일 이메일의 스팸 이동은 `mark_email_as_spam` 전용 도구로 제공함.
-- 일반 `move_email`은 `\Trash`와 `\Junk` 특수 편지함 이동을 거부함.
+- 명시적으로 지정된 이메일의 스팸 이동은 `mark_emails_as_spam` 전용 도구로
+  제공함.
+- 일반 `move_emails`는 `\Trash`와 `\Junk` 특수 편지함 이동을 거부함.
 
 ## 결과
 

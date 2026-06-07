@@ -53,22 +53,28 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `get_email`: 안전한 텍스트 본문과 첨부파일 메타데이터 조회
 - `get_email_headers`: 이메일 원본 헤더 조회
 - `get_email_source`: 크기 제한이 적용된 RFC822 원본 조회
-- `set_email_read_status`: 단일 이메일의 읽음 또는 읽지 않음 상태 변경
-- `set_email_flagged_status`: 단일 이메일의 별표 상태 변경
-- `copy_email`: 단일 이메일 복사
-- `move_email`: 단일 이메일을 안전한 대상 편지함으로 이동
-- `trash_email`: 단일 이메일을 휴지통으로 이동
-- `mark_email_as_spam`: 단일 이메일을 스팸 편지함으로 이동
+- `set_emails_read_status`: 여러 이메일의 읽음 또는 읽지 않음 상태 변경
+- `set_emails_flagged_status`: 여러 이메일의 별표 상태 변경
+- `copy_emails`: 여러 이메일을 작업별 대상 편지함으로 복사
+- `move_emails`: 여러 이메일을 작업별 안전한 대상 편지함으로 이동
+- `trash_emails`: 여러 이메일을 휴지통으로 이동
+- `mark_emails_as_spam`: 여러 이메일을 스팸 편지함으로 이동
 - `create_mailbox`: 사용자 편지함 생성
 - `rename_mailbox`: 사용자 편지함 이름 변경
 - `set_mailbox_subscription`: 편지함 구독 상태 변경
 - `get_mail_policy`: 최신 메일 관리 자연어 정책 조회
+- `get_bulk_operation_diagnostics`: 현재 프로세스의 최근 벌크 작업 실행 요약 조회
 - `preview_mail_policy_patch`: 규칙 단위 정책 변경 미리보기
 - `apply_mail_policy_patch`: revision이 일치할 때 규칙 단위 정책 변경 적용
 - `get_mail_policy_history`: 최근 정책 revision 조회
 - `revert_mail_policy_revision`: 과거 정책을 새 revision으로 복원
 
 영구 삭제, 휴지통 비우기, 편지함 삭제, 메일 발송 기능은 제공하지 않음.
+
+복수형 이메일 변경 도구는 한 호출에서 최대 100개 작업을 처리함. 작업마다
+고유한 `id`, 출발 편지함, IMAP UID와 필요한 상태 또는 목적지 편지함을 지정함.
+응답은 처리 개수와 작업별 `succeeded` 또는 `failed` 결과를 반환함. 일부
+작업만 성공할 수 있으며 transaction과 rollback은 지원하지 않음.
 
 ## 검증
 
