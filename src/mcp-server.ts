@@ -16,6 +16,8 @@ const operationIdSchema = z.string().min(1).max(100).describe(
 );
 const defaultBulkEmailTextMaxChars = 2_000;
 const bulkEmailTextHardLimit = 20_000;
+const maximumImapUid = 4_294_967_295;
+const maximumSearchSize = 4_294_967_294;
 const toolOutputSchema = z.object({ result: z.unknown() });
 const emailDetailSchema = z.object({
   mailbox: mailboxSchema,
@@ -110,6 +112,33 @@ const moveOperationsSchema = bulkOperationsSchema(
 );
 const emailOperationsSchema = bulkOperationsSchema(emailOperationSchema, emailKey);
 const emailReadOperationsSchema = bulkOperationsSchema(emailOperationSchema, emailKey, 20);
+const searchEmailsInputSchema = z.object({
+  mailbox: mailboxSchema.default("INBOX"),
+  text: z.string().min(1).max(500).optional(),
+  from: z.string().min(1).max(320).optional(),
+  to: z.string().min(1).max(320).optional(),
+  subject: z.string().min(1).max(500).optional(),
+  since: z.iso.date().optional(),
+  before: z.iso.date().optional(),
+  unread: z.boolean().optional(),
+  flagged: z.boolean().optional()
+    .describe("true이면 별표 표시된 이메일, false이면 별표 표시되지 않은 이메일만 검색함"),
+  minSize: z.number().int().min(0).max(maximumSearchSize).optional()
+    .describe("이메일 원본 크기의 최소 byte 수를 포함 조건으로 지정함"),
+  maxSize: z.number().int().min(0).max(maximumSearchSize).optional()
+    .describe("이메일 원본 크기의 최대 byte 수를 포함 조건으로 지정함"),
+  olderThanUid: z.number().int().positive().max(maximumImapUid).optional()
+    .describe("이 UID를 제외하고 더 작은 UID의 오래된 결과만 검색함"),
+  limit: z.number().int().min(1).max(100).default(20)
+}).superRefine(({ minSize, maxSize }, context) => {
+  if (minSize !== undefined && maxSize !== undefined && minSize > maxSize) {
+    context.addIssue({
+      code: "custom",
+      message: "minSize는 maxSize보다 클 수 없음",
+      path: ["minSize"]
+    });
+  }
+});
 
 export function createMcpServer(
   emailReader: EmailReader,
@@ -295,18 +324,8 @@ export function createMcpServer(
     {
       title: "이메일 검색",
       description:
-        "지정한 편지함에서 이메일 메타데이터를 검색함. 전체 본문과 첨부파일 내용은 반환하지 않음",
-      inputSchema: z.object({
-        mailbox: mailboxSchema.default("INBOX"),
-        text: z.string().min(1).max(500).optional(),
-        from: z.string().min(1).max(320).optional(),
-        to: z.string().min(1).max(320).optional(),
-        subject: z.string().min(1).max(500).optional(),
-        since: z.iso.date().optional(),
-        before: z.iso.date().optional(),
-        unread: z.boolean().optional(),
-        limit: z.number().int().min(1).max(100).default(20)
-      }),
+        "지정한 편지함에서 이메일 메타데이터를 UID 내림차순으로 검색함. 다음 페이지는 마지막 결과 UID를 olderThanUid로 지정함. 전체 본문과 첨부파일 내용은 반환하지 않음",
+      inputSchema: searchEmailsInputSchema,
       outputSchema: toolOutputSchema,
       annotations: { readOnlyHint: true },
       _meta: { securitySchemes: securitySchemes("mail.read") }

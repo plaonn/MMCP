@@ -42,6 +42,18 @@ launchctl print gui/$(id -u)/com.plaonn.mmcp.caddy
 강제 종료 또는 비정상 종료 후에는 `launchd` 재시작 간격 때문에 endpoint
 복구까지 약 10초가 걸릴 수 있음.
 
+## MCP 도구 schema 변경 반영
+
+도구명 또는 입력 schema를 변경한 뒤 MMCP 서비스를 재시작해도 ChatGPT
+앱/커넥터가 이전 schema를 캐시하여 새 도구나 입력을 차단할 수 있음.
+
+새 schema를 사용하는 호출이 서버에 도달하기 전에 거부되면 MMCP 구현 오류로
+판단하기 전에 앱/커넥터 schema를 갱신하거나 재연결함. 갱신 후 도구 목록에서
+새 필드가 노출되는지 확인하고 동일 호출을 다시 검증함.
+
+서버 측 자동 테스트와 서비스 health 확인만으로 ChatGPT가 최신 schema를
+사용한다고 판단하지 않음.
+
 서비스 제거:
 
 ```bash

@@ -49,7 +49,7 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `get_server_capabilities`: IMAP 서버 지원 기능 조회
 - `get_quota`: 저장 용량 사용량 조회
 - `list_mailboxes`: 편지함 목록 조회
-- `search_emails`: 이메일 메타데이터 검색
+- `search_emails`: UID 페이지네이션과 별표·크기 조건을 지원하는 이메일 메타데이터 검색
 - `get_email`: 안전한 텍스트 본문과 첨부파일 메타데이터 조회
 - `get_emails`: 여러 이메일의 안전한 텍스트 본문과 첨부파일 메타데이터 조회
 - `get_email_headers`: 이메일 원본 헤더 조회
@@ -82,6 +82,10 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 미리보기를 반환하고 원래 길이와 잘림 여부를 표시함. 본문과 첨부파일
 메타데이터 포함 여부를 선택할 수 있으며 전체 본문은 단건 `get_email`로
 조회함. 일부 조회가 실패해도 나머지 조회를 계속함.
+
+`search_emails`는 기존 메타데이터 배열을 UID 내림차순으로 반환함. 다음
+페이지는 현재 결과의 마지막 UID를 `olderThanUid`로 지정하여 조회하며, 별표
+상태와 이메일 원본 크기 범위를 검색 조건으로 지정할 수 있음.
 
 ## 검증
 

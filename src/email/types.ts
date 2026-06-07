@@ -41,6 +41,10 @@ export type SearchEmailsInput = {
   since?: string;
   before?: string;
   unread?: boolean;
+  flagged?: boolean;
+  minSize?: number;
+  maxSize?: number;
+  olderThanUid?: number;
   limit: number;
 };
 

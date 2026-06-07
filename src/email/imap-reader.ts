@@ -99,6 +99,10 @@ export class ImapEmailReader implements EmailReader {
     return this.withClient(async (client) => {
       const lock = await client.getMailboxLock(input.mailbox);
       try {
+        if (input.olderThanUid === 1) {
+          return [];
+        }
+
         const criteria = buildSearchCriteria(input);
         const matched = await client.search(criteria, { uid: true });
         if (!matched) {
@@ -493,6 +497,10 @@ function buildSearchCriteria(input: SearchEmailsInput): Record<string, unknown> 
   if (input.since) criteria.since = new Date(input.since);
   if (input.before) criteria.before = new Date(input.before);
   if (input.unread !== undefined) criteria.seen = !input.unread;
+  if (input.flagged !== undefined) criteria.flagged = input.flagged;
+  if (input.minSize !== undefined && input.minSize > 0) criteria.larger = input.minSize - 1;
+  if (input.maxSize !== undefined) criteria.smaller = input.maxSize + 1;
+  if (input.olderThanUid !== undefined) criteria.uid = `1:${input.olderThanUid - 1}`;
 
   return Object.keys(criteria).length > 0 ? criteria : { all: true };
 }

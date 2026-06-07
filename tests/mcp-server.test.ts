@@ -165,6 +165,15 @@ describe("MCP tools", () => {
       expect(result.tools.find((tool) => tool.name === "search_emails")?._meta).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
       });
+      expect(result.tools.find((tool) => tool.name === "search_emails")?.inputSchema)
+        .toMatchObject({
+          properties: {
+            flagged: { type: "boolean" },
+            minSize: { type: "integer", minimum: 0, maximum: 4_294_967_294 },
+            maxSize: { type: "integer", minimum: 0, maximum: 4_294_967_294 },
+            olderThanUid: { type: "integer", exclusiveMinimum: 0, maximum: 4_294_967_295 }
+          }
+        });
       expect(result.tools.find((tool) => tool.name === "get_emails")?._meta).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
       });
@@ -183,6 +192,10 @@ describe("MCP tools", () => {
         arguments: {
           mailbox: "INBOX",
           subject: "테스트",
+          flagged: true,
+          minSize: 1_024,
+          maxSize: 2_048,
+          olderThanUid: 100,
           limit: 10
         }
       });
@@ -190,11 +203,47 @@ describe("MCP tools", () => {
       expect(emailReader.searchEmails).toHaveBeenCalledWith({
         mailbox: "INBOX",
         subject: "테스트",
+        flagged: true,
+        minSize: 1_024,
+        maxSize: 2_048,
+        olderThanUid: 100,
         limit: 10
       });
       expect(result.structuredContent).toMatchObject({
         result: [{ uid: 42, subject: "테스트 메일" }]
       });
+      expect((result.structuredContent as { result: Array<Record<string, unknown>> }).result[0])
+        .not.toHaveProperty("text");
+      expect((result.structuredContent as { result: Array<Record<string, unknown>> }).result[0])
+        .not.toHaveProperty("attachments");
+    });
+  });
+
+  it("검색 도구의 잘못된 UID cursor와 크기 범위를 실행 전에 거부함", async () => {
+    await withClient(async (client) => {
+      const before = vi.mocked(emailReader.searchEmails).mock.calls.length;
+      const invalidCursor = await client.callTool({
+        name: "search_emails",
+        arguments: { mailbox: "INBOX", olderThanUid: 0 }
+      });
+      const invalidSizeRange = await client.callTool({
+        name: "search_emails",
+        arguments: { mailbox: "INBOX", minSize: 2_048, maxSize: 1_024 }
+      });
+      const tooLargeSize = await client.callTool({
+        name: "search_emails",
+        arguments: { mailbox: "INBOX", maxSize: 4_294_967_295 }
+      });
+      const negativeSize = await client.callTool({
+        name: "search_emails",
+        arguments: { mailbox: "INBOX", minSize: -1 }
+      });
+
+      expect(invalidCursor.isError).toBe(true);
+      expect(invalidSizeRange.isError).toBe(true);
+      expect(tooLargeSize.isError).toBe(true);
+      expect(negativeSize.isError).toBe(true);
+      expect(vi.mocked(emailReader.searchEmails).mock.calls).toHaveLength(before);
     });
   });
 
