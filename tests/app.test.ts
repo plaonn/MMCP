@@ -374,7 +374,8 @@ describe("HTTP app", () => {
             operations: [
               { id: "read-inbox", mailbox: "INBOX", uid: 42 },
               { id: "read-other", mailbox: "Other", uid: 7 }
-            ]
+            ],
+            textMaxChars: 2
           }
         }
       })
@@ -399,8 +400,28 @@ describe("HTTP app", () => {
         succeeded: 2,
         failed: 0,
         results: [
-          { id: "read-inbox", status: "succeeded", email: { mailbox: "INBOX", uid: 42 } },
-          { id: "read-other", status: "succeeded", email: { mailbox: "Other", uid: 7 } }
+          {
+            id: "read-inbox",
+            status: "succeeded",
+            email: {
+              mailbox: "INBOX",
+              uid: 42,
+              text: "본문",
+              textLength: 2,
+              textTruncated: false
+            }
+          },
+          {
+            id: "read-other",
+            status: "succeeded",
+            email: {
+              mailbox: "Other",
+              uid: 7,
+              text: "본문",
+              textLength: 2,
+              textTruncated: false
+            }
+          }
         ]
       }
     });

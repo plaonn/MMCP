@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { EmailReader } from "./email/types.js";
+import type { EmailDetail, EmailReader } from "./email/types.js";
 import {
   type PolicyPatchPreview,
   type PolicyStore,
@@ -14,6 +14,8 @@ const uidSchema = z.number().int().positive();
 const operationIdSchema = z.string().min(1).max(100).describe(
   "호출 내에서 고유하며 실패 응답을 원래 작업과 연결하는 작업 식별자"
 );
+const defaultBulkEmailTextMaxChars = 2_000;
+const bulkEmailTextHardLimit = 20_000;
 const toolOutputSchema = z.object({ result: z.unknown() });
 const emailDetailSchema = z.object({
   mailbox: mailboxSchema,
@@ -28,7 +30,11 @@ const emailDetailSchema = z.object({
   size: z.number().int().nonnegative(),
   flags: z.array(z.string()),
   hasAttachments: z.boolean(),
-  text: z.string(),
+  text: z.string().optional().describe("요청한 제한 안에서 반환한 안전한 텍스트 미리보기"),
+  textLength: z.number().int().nonnegative().describe("정제된 전체 안전 텍스트의 문자 수"),
+  textTruncated: z.boolean().describe("반환한 text가 전체 안전 텍스트보다 짧은지 여부"),
+  truncationReason: z.enum(["per-email-limit", "total-text-limit"]).optional()
+    .describe("본문이 잘린 경우 적용된 제한"),
   attachments: z.array(z.object({
     filename: z.string().nullable(),
     contentType: z.string(),
@@ -331,17 +337,28 @@ export function createMcpServer(
     {
       title: "여러 이메일 조회",
       description:
-        "최대 20개 이메일의 안전한 텍스트 본문과 첨부파일 메타데이터를 조회함. 일부 조회만 성공할 수 있음",
+        "최대 20개 이메일의 제한된 안전한 텍스트 미리보기와 첨부파일 메타데이터를 조회함. 전체 본문은 get_email을 사용함. 일부 조회만 성공할 수 있음",
       inputSchema: z.object({
-        operations: emailReadOperationsSchema
+        operations: emailReadOperationsSchema,
+        includeText: z.boolean().default(true)
+          .describe("false이면 본문을 반환하지 않고 길이와 잘림 여부만 반환함"),
+        textMaxChars: z.number().int().min(1).max(bulkEmailTextHardLimit)
+          .default(defaultBulkEmailTextMaxChars)
+          .describe("이메일별 본문 미리보기 최대 문자 수. 전체 본문은 get_email을 사용함"),
+        includeAttachmentMetadata: z.boolean().default(true)
+          .describe("false이면 attachments를 빈 배열로 반환함")
       }),
       outputSchema: bulkEmailReadOutputSchema,
       annotations: { readOnlyHint: true },
       _meta: { securitySchemes: securitySchemes("mail.read") }
     },
-    async ({ operations }, extra) =>
+    async ({ operations, includeText, textMaxChars, includeAttachmentMetadata }, extra) =>
       withScope(options, extra, "mail.read", () =>
-        executeBulkRead(operations, ({ mailbox, uid }) => emailReader.getEmail(mailbox, uid))
+        executeBulkRead(
+          operations,
+          ({ mailbox, uid }) => emailReader.getEmail(mailbox, uid),
+          { includeText, textMaxChars, includeAttachmentMetadata }
+        )
       )
   );
 
@@ -744,22 +761,36 @@ async function executeBulk<T extends { id: string }>(
   };
 }
 
-async function executeBulkRead<T extends { id: string }, R>(
+async function executeBulkRead<T extends { id: string }>(
   operations: T[],
-  execute: (operation: T) => Promise<R>
+  execute: (operation: T) => Promise<EmailDetail>,
+  options: {
+    includeText: boolean;
+    textMaxChars: number;
+    includeAttachmentMetadata: boolean;
+  }
 ) {
   const results: Array<
-    | { id: string; status: "succeeded"; email: R }
+    | { id: string; status: "succeeded"; email: BulkEmailPreview }
     | { id: string; status: "failed"; code: string; error: string }
   > = [];
+  let remainingTextBudget = bulkEmailTextHardLimit;
 
-  for (const operation of operations) {
+  for (const [index, operation] of operations.entries()) {
     try {
+      const email = await execute(operation);
+      const remainingOperations = operations.length - index;
+      const fairTextLimit = Math.floor(remainingTextBudget / remainingOperations);
+      const preview = buildBulkEmailPreview(email, {
+        ...options,
+        textLimit: Math.min(options.textMaxChars, fairTextLimit)
+      });
       results.push({
         id: operation.id,
         status: "succeeded",
-        email: await execute(operation)
+        email: preview
       });
+      remainingTextBudget -= preview.text ? codePointLength(preview.text) : 0;
     } catch (error) {
       results.push({
         id: operation.id,
@@ -776,6 +807,53 @@ async function executeBulkRead<T extends { id: string }, R>(
     failed,
     results
   };
+}
+
+type BulkEmailPreview = Omit<EmailDetail, "text"> & {
+  text?: string;
+  textLength: number;
+  textTruncated: boolean;
+  truncationReason?: "per-email-limit" | "total-text-limit";
+};
+
+function buildBulkEmailPreview(
+  email: EmailDetail,
+  options: {
+    includeText: boolean;
+    textMaxChars: number;
+    includeAttachmentMetadata: boolean;
+    textLimit: number;
+  }
+): BulkEmailPreview {
+  const { text, attachments, ...metadata } = email;
+  const textLength = codePointLength(text);
+  const preview: BulkEmailPreview = {
+    ...metadata,
+    textLength,
+    textTruncated: false,
+    attachments: options.includeAttachmentMetadata ? attachments : []
+  };
+
+  if (!options.includeText) {
+    preview.textTruncated = textLength > 0;
+    return preview;
+  }
+
+  preview.text = truncateByCodePoints(text, options.textLimit);
+  preview.textTruncated = codePointLength(preview.text) < textLength;
+  if (preview.textTruncated) {
+    preview.truncationReason =
+      options.textLimit < options.textMaxChars ? "total-text-limit" : "per-email-limit";
+  }
+  return preview;
+}
+
+function codePointLength(value: string): number {
+  return [...value].length;
+}
+
+function truncateByCodePoints(value: string, maximum: number): string {
+  return [...value].slice(0, maximum).join("");
 }
 
 function recordBulkDiagnostic(entry: typeof bulkDiagnostics[number]): void {

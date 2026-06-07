@@ -259,7 +259,9 @@ describe("MCP tools", () => {
                 mailbox: "Other",
                 uid: 7,
                 subject: "다른 편지함 메일",
-                text: "다른 본문"
+                text: "다른 본문",
+                textLength: 5,
+                textTruncated: false
               })
             }
           ]
@@ -269,6 +271,167 @@ describe("MCP tools", () => {
       expect(content).toHaveLength(1);
       expect(content[0]?.text).not.toContain("\n");
       expect(JSON.parse(content[0]?.text ?? "")).toEqual(result.structuredContent);
+    });
+  });
+
+  it("단건 이메일 조회는 기존 전체 본문 계약을 유지함", async () => {
+    await withClient(async (client) => {
+      const result = await client.callTool({
+        name: "get_email",
+        arguments: { mailbox: "INBOX", uid: 42 }
+      });
+      const email = (result.structuredContent as { result: Record<string, unknown> }).result;
+
+      expect(email).toMatchObject({ mailbox: "INBOX", uid: 42, text: "본문" });
+      expect(email).not.toHaveProperty("textLength");
+      expect(email).not.toHaveProperty("textTruncated");
+      expect(email).not.toHaveProperty("truncationReason");
+    });
+  });
+
+  it("여러 이메일 조회는 기본 길이로 본문을 제한하고 잘림 정보를 반환함", async () => {
+    await withClient(async (client) => {
+      vi.mocked(emailReader.getEmail)
+        .mockResolvedValueOnce(emailDetail("INBOX", 1, "가".repeat(2_500), [{
+          filename: "invoice.pdf",
+          contentType: "application/pdf",
+          size: 100,
+          disposition: "attachment"
+        }]))
+        .mockResolvedValueOnce(emailDetail("Other", 2, "짧은 본문"));
+
+      const result = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [
+            { id: "long", mailbox: "INBOX", uid: 1 },
+            { id: "short", mailbox: "Other", uid: 2 }
+          ]
+        }
+      });
+
+      expect(result.structuredContent).toMatchObject({
+        result: {
+          attempted: 2,
+          succeeded: 2,
+          failed: 0,
+          results: [
+            {
+              id: "long",
+              status: "succeeded",
+              email: {
+                text: "가".repeat(2_000),
+                textLength: 2_500,
+                textTruncated: true,
+                truncationReason: "per-email-limit",
+                attachments: [expect.objectContaining({ filename: "invoice.pdf" })]
+              }
+            },
+            {
+              id: "short",
+              status: "succeeded",
+              email: {
+                text: "짧은 본문",
+                textLength: 5,
+                textTruncated: false,
+                attachments: []
+              }
+            }
+          ]
+        }
+      });
+    });
+  });
+
+  it("여러 이메일 조회는 본문과 첨부 메타데이터 제외 옵션을 적용함", async () => {
+    await withClient(async (client) => {
+      vi.mocked(emailReader.getEmail).mockResolvedValueOnce(
+        emailDetail("INBOX", 1, "본문", [{
+          filename: "invoice.pdf",
+          contentType: "application/pdf",
+          size: 100,
+          disposition: "attachment"
+        }])
+      );
+
+      const result = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [{ id: "metadata-only", mailbox: "INBOX", uid: 1 }],
+          includeText: false,
+          includeAttachmentMetadata: false
+        }
+      });
+      const email = (result.structuredContent as {
+        result: { results: Array<{ email: Record<string, unknown> }> };
+      }).result.results[0]?.email;
+
+      expect(email).toMatchObject({
+        textLength: 2,
+        textTruncated: true,
+        attachments: []
+      });
+      expect(email).not.toHaveProperty("text");
+      expect(email).not.toHaveProperty("truncationReason");
+    });
+  });
+
+  it("여러 이메일 조회는 명시적 본문 제한과 호출 전체 제한을 적용함", async () => {
+    await withClient(async (client) => {
+      vi.mocked(emailReader.getEmail)
+        .mockResolvedValueOnce(emailDetail("INBOX", 1, "😀".repeat(15_000)))
+        .mockResolvedValueOnce(emailDetail("Other", 2, "나".repeat(15_000)));
+
+      const result = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [
+            { id: "first", mailbox: "INBOX", uid: 1 },
+            { id: "second", mailbox: "Other", uid: 2 }
+          ],
+          textMaxChars: 20_000
+        }
+      });
+      const results = (result.structuredContent as {
+        result: { results: Array<{ email: { text: string; truncationReason: string } }> };
+      }).result.results;
+
+      expect([...results[0]!.email.text]).toHaveLength(10_000);
+      expect([...results[1]!.email.text]).toHaveLength(10_000);
+      expect(results[0]!.email.truncationReason).toBe("total-text-limit");
+      expect(results[1]!.email.truncationReason).toBe("total-text-limit");
+      expect(results.reduce((sum, item) => sum + [...item.email.text].length, 0)).toBe(20_000);
+    });
+  });
+
+  it("여러 이메일 조회는 명시한 작은 본문 제한을 적용함", async () => {
+    await withClient(async (client) => {
+      vi.mocked(emailReader.getEmail).mockResolvedValueOnce(
+        emailDetail("INBOX", 1, "😀가나다")
+      );
+
+      const result = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [{ id: "custom-limit", mailbox: "INBOX", uid: 1 }],
+          textMaxChars: 3
+        }
+      });
+
+      expect(result.structuredContent).toMatchObject({
+        result: {
+          results: [{
+            id: "custom-limit",
+            status: "succeeded",
+            email: {
+              text: "😀가나",
+              textLength: 4,
+              textTruncated: true,
+              truncationReason: "per-email-limit"
+            }
+          }]
+        }
+      });
     });
   });
 
@@ -294,9 +457,17 @@ describe("MCP tools", () => {
           }))
         }
       });
+      const invalidTextLimit = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [{ id: "invalid-limit", mailbox: "INBOX", uid: 1 }],
+          textMaxChars: 0
+        }
+      });
 
       expect(duplicate.isError).toBe(true);
       expect(tooMany.isError).toBe(true);
+      expect(invalidTextLimit.isError).toBe(true);
       expect(vi.mocked(emailReader.getEmail).mock.calls).toHaveLength(before);
     });
   });
@@ -609,4 +780,33 @@ async function withClient(operation: (client: Client) => Promise<void>): Promise
     await server.close();
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function emailDetail(
+  mailbox: string,
+  uid: number,
+  text: string,
+  attachments: Array<{
+    filename: string | null;
+    contentType: string;
+    size: number;
+    disposition: string | null;
+  }> = []
+) {
+  return {
+    mailbox,
+    uid,
+    messageId: `<${uid}@example.com>`,
+    subject: "테스트 메일",
+    from: ["sender@example.com"],
+    to: ["user@naver.com"],
+    cc: [],
+    replyTo: [],
+    date: "2026-06-07T00:00:00.000Z",
+    size: 2048,
+    flags: [],
+    hasAttachments: attachments.length > 0,
+    text,
+    attachments
+  };
 }
