@@ -5,6 +5,15 @@ export type Mailbox = {
   subscribed: boolean;
 };
 
+export type MailboxStatus = {
+  mailbox: string;
+  uidValidity: string | null;
+  uidValidityUsable: boolean;
+  uidNext: number | null;
+  exists: number;
+  highestModseq: string | null;
+};
+
 export type EmailSummary = {
   mailbox: string;
   uid: number;
@@ -127,6 +136,7 @@ export interface EmailReader {
   checkConnection(): Promise<{ connected: true }>;
   getServerCapabilities(): Promise<ServerCapabilities>;
   getQuota(mailbox: string): Promise<QuotaResult>;
+  getMailboxStatus(mailbox: string): Promise<MailboxStatus>;
   listMailboxes(): Promise<Mailbox[]>;
   searchEmails(input: SearchEmailsInput): Promise<EmailSummary[]>;
   getEmail(mailbox: string, uid: number): Promise<EmailDetail>;

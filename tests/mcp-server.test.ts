@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EmailReader } from "../src/email/types.js";
+import { SqliteLedgerStore } from "../src/ledger/sqlite-ledger-store.js";
 import { createMcpServer } from "../src/mcp-server.js";
 import { PolicyStore } from "../src/policy-store.js";
 
@@ -18,6 +19,14 @@ const emailReader: EmailReader = {
     features: { idle: false, move: true, quota: true, sort: false, thread: false }
   })),
   getQuota: vi.fn(async (mailbox) => ({ supported: true, mailbox })),
+  getMailboxStatus: vi.fn(async (mailbox) => ({
+    mailbox,
+    uidValidity: "123",
+    uidValidityUsable: true,
+    uidNext: 43,
+    exists: 10,
+    highestModseq: "999"
+  })),
   listMailboxes: vi.fn(async () => [
     {
       path: "INBOX",
@@ -111,22 +120,30 @@ describe("MCP tools", () => {
         "get_emails",
         "get_email_headers",
         "get_email_source",
+        "get_mail_action",
+        "get_mailbox_status",
         "get_bulk_operation_diagnostics",
         "get_quota",
         "get_server_capabilities",
         "get_mail_rules",
         "get_mail_rules_history",
+        "get_todoist_export_candidates",
         "list_mailboxes",
         "mark_emails_as_spam",
         "move_emails",
         "preview_mail_rules_patch",
+        "record_mail_action_location",
+        "record_todoist_sync_results",
         "rename_mailbox",
         "revert_mail_rules_revision",
+        "search_mail_actions",
         "set_emails_flagged_status",
         "set_emails_read_status",
         "set_mailbox_subscription",
         "search_emails",
-        "trash_emails"
+        "trash_emails",
+        "update_mail_actions",
+        "upsert_mail_actions"
       ].sort());
       expect(JSON.stringify(result.tools)).not.toContain("policy");
       expect(JSON.stringify(result.tools)).not.toContain("정책");
@@ -216,6 +233,203 @@ describe("MCP tools", () => {
         .not.toHaveProperty("text");
       expect((result.structuredContent as { result: Array<Record<string, unknown>> }).result[0])
         .not.toHaveProperty("attachments");
+    });
+  });
+
+  it("편지함 상태 조회를 email reader에 전달함", async () => {
+    await withClient(async (client) => {
+      const result = await client.callTool({
+        name: "get_mailbox_status",
+        arguments: { mailbox: "INBOX" }
+      });
+
+      expect(emailReader.getMailboxStatus).toHaveBeenCalledWith("INBOX");
+      expect(result.structuredContent).toMatchObject({
+        result: {
+          mailbox: "INBOX",
+          uidValidity: "123",
+          uidValidityUsable: true,
+          uidNext: 43,
+          exists: 10,
+          highestModseq: "999"
+        }
+      });
+    });
+  });
+
+  it("메일 후속 조치 ledger를 생성, 검색, 갱신함", async () => {
+    await withClient(async (client) => {
+      const created = await client.callTool({
+        name: "upsert_mail_actions",
+        arguments: {
+          operations: [{
+            id: "create-ledger-action",
+            mailbox: "INBOX",
+            uid: 42,
+            uidValidity: "123",
+            uidValidityUsable: true,
+            messageId: "<message@example.com>",
+            subject: "납부 요청",
+            from: ["billing@example.com"],
+            date: "2026-06-07T00:00:00.000Z",
+            size: 1024,
+            status: "actionable",
+            actionType: "pay",
+            summary: "요금 납부",
+            reason: "기한 전 처리 필요",
+            dueAt: "2026-06-30T00:00:00.000Z",
+            tags: ["topic:billing"],
+            todoistSyncStatus: "export_ready"
+          }]
+        }
+      });
+      const createResult = created.structuredContent as {
+        result: {
+          results: Array<{
+            status: "succeeded";
+            result: { action: { id: string; revision: number } };
+          }>;
+        };
+      };
+      const action = createResult.result.results[0]!.result.action;
+
+      expect(created.structuredContent).toMatchObject({
+        result: {
+          attempted: 1,
+          succeeded: 1,
+          failed: 0,
+          results: [{
+            id: "create-ledger-action",
+            status: "succeeded",
+            result: {
+              action: {
+                status: "actionable",
+                actionType: "pay",
+                mailbox: "INBOX",
+                uid: 42,
+                uidValidity: "123",
+                uidValidityUsable: true,
+                tags: ["topic:billing"],
+                todoistSyncStatus: "export_ready"
+              }
+            }
+          }]
+        }
+      });
+
+      const search = await client.callTool({
+        name: "search_mail_actions",
+        arguments: {
+          statuses: ["actionable"],
+          actionTypes: ["pay"],
+          tags: ["topic:billing"],
+          limit: 10
+        }
+      });
+      expect(search.structuredContent).toMatchObject({
+        result: [{
+          id: action.id,
+          displaySubject: "납부 요청",
+          displayFrom: "billing@example.com"
+        }]
+      });
+
+      const candidates = await client.callTool({
+        name: "get_todoist_export_candidates",
+        arguments: { limit: 10 }
+      });
+      expect(candidates.structuredContent).toMatchObject({
+        result: [{
+          actionId: action.id,
+          taskTitle: "요금 납부",
+          priority: "normal",
+          tags: ["topic:billing"]
+        }]
+      });
+
+      const updated = await client.callTool({
+        name: "update_mail_actions",
+        arguments: {
+          operations: [{
+            id: "finish-ledger-action",
+            actionId: action.id,
+            expectedRevision: action.revision,
+            status: "done",
+            cleanupStatus: "candidate"
+          }]
+        }
+      });
+      expect(updated.structuredContent).toMatchObject({
+        result: {
+          attempted: 1,
+          succeeded: 1,
+          failed: 0,
+          results: [{
+            status: "succeeded",
+            result: { action: { status: "done", cleanupStatus: "candidate" } }
+          }]
+        }
+      });
+    });
+  });
+
+  it("메일 후속 조치 ledger의 stale revision 실패를 개별 작업 실패로 반환함", async () => {
+    await withClient(async (client) => {
+      const created = await client.callTool({
+        name: "upsert_mail_actions",
+        arguments: {
+          operations: [{
+            id: "create-stale-action",
+            mailbox: "INBOX",
+            uid: 43,
+            status: "actionable",
+            actionType: "review"
+          }]
+        }
+      });
+      const action = (created.structuredContent as {
+        result: {
+          results: Array<{
+            result: { action: { id: string; revision: number } };
+          }>;
+        };
+      }).result.results[0]!.result.action;
+
+      await client.callTool({
+        name: "update_mail_actions",
+        arguments: {
+          operations: [{
+            id: "advance-action",
+            actionId: action.id,
+            expectedRevision: action.revision,
+            status: "waiting"
+          }]
+        }
+      });
+      const stale = await client.callTool({
+        name: "update_mail_actions",
+        arguments: {
+          operations: [{
+            id: "stale-action",
+            actionId: action.id,
+            expectedRevision: action.revision,
+            status: "done"
+          }]
+        }
+      });
+
+      expect(stale.structuredContent).toMatchObject({
+        result: {
+          attempted: 1,
+          succeeded: 0,
+          failed: 1,
+          results: [{
+            id: "stale-action",
+            status: "failed",
+            code: "STALE_MAIL_ACTION_REVISION"
+          }]
+        }
+      });
     });
   });
 
@@ -814,8 +1028,10 @@ describe("MCP tools", () => {
 
 async function withClient(operation: (client: Client) => Promise<void>): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "mmcp-mcp-policy-test-"));
+  const ledgerStore = new SqliteLedgerStore(join(directory, "workflow.sqlite"));
   const server = createMcpServer(emailReader, {
-    policyStore: new PolicyStore(join(directory, "policy.json"))
+    policyStore: new PolicyStore(join(directory, "policy.json")),
+    ledgerStore
   });
   const client = new Client({ name: "mmcp-test", version: "0.1.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -827,6 +1043,7 @@ async function withClient(operation: (client: Client) => Promise<void>): Promise
   } finally {
     await client.close();
     await server.close();
+    ledgerStore.close();
     rmSync(directory, { recursive: true, force: true });
   }
 }

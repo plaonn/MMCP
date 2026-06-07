@@ -3,12 +3,12 @@
 IMAP을 통해 수신 이메일을 관리하는 개인용 모바일 우선 MCP 서버임.
 
 현재 수신 이메일 조회 및 상태 관리 MVP가 구현되어 있음. 네이버 메일의 조회,
-읽음·별표 상태 변경, 복사, 일반·휴지통·스팸 이동, 사용자 편지함 관리를
-Streamable HTTP MCP 도구로 제공함.
+읽음·별표 상태 변경, 복사, 일반·휴지통·스팸 이동, 사용자 편지함 관리와
+메일 후속 조치 ledger를 Streamable HTTP MCP 도구로 제공함.
 
 ## 요구 환경
 
-- Node.js 22 이상
+- Node.js 24.15 이상
 - 네이버 메일에서 활성화한 IMAP
 - 네이버 2단계 인증과 애플리케이션 비밀번호
 
@@ -25,6 +25,8 @@ Git에서 제외됨.
 
 메일 관리 자연어 규칙은 기본적으로 `~/.config/mmcp/mail-policy.json`에
 저장됨. 필요하면 `MMCP_POLICY_PATH`로 저장 경로를 변경함.
+메일 후속 조치 ledger는 기본적으로 `~/.config/mmcp/workflow.sqlite`에
+저장됨. 필요하면 `MMCP_WORKFLOW_DB_PATH`로 저장 경로를 변경함.
 
 네이버 연결만 안전하게 확인하려면 다음 명령을 실행함. 이메일 주소, 편지함
 이름, 메일 내용은 출력하지 않음.
@@ -49,6 +51,7 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `get_server_capabilities`: IMAP 서버 지원 기능 조회
 - `get_quota`: 저장 용량 사용량 조회
 - `list_mailboxes`: 편지함 목록 조회
+- `get_mailbox_status`: UIDVALIDITY, UIDNEXT, 메시지 수와 HIGHESTMODSEQ 조회
 - `search_emails`: UID 페이지네이션과 별표·크기 조건을 지원하는 이메일 메타데이터 검색
 - `get_email`: 안전한 텍스트 본문과 첨부파일 메타데이터 조회
 - `get_emails`: 여러 이메일의 안전한 텍스트 본문과 첨부파일 메타데이터 조회
@@ -69,6 +72,13 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `apply_mail_rules_patch`: revision이 일치할 때 규칙 단위 변경 적용
 - `get_mail_rules_history`: 최근 규칙 revision 조회
 - `revert_mail_rules_revision`: 과거 규칙 목록을 새 revision으로 복원
+- `search_mail_actions`: MMCP 내부 메일 후속 조치 상태 검색
+- `get_mail_action`: 메일 후속 조치 상태 상세 및 비식별 event 이력 조회
+- `get_todoist_export_candidates`: Todoist로 내보낼 후속 조치 후보 조회
+- `upsert_mail_actions`: 메일 후속 조치 상태 생성 또는 갱신
+- `update_mail_actions`: 메일 후속 조치 상태, 일정, tag와 sync 정보 갱신
+- `record_mail_action_location`: 메일 후속 조치의 현재 편지함/UID 위치 기록
+- `record_todoist_sync_results`: 외부 Todoist task ID와 sync 상태 기록
 
 영구 삭제, 휴지통 비우기, 편지함 삭제, 메일 발송 기능은 제공하지 않음.
 
@@ -86,6 +96,11 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 `search_emails`는 기존 메타데이터 배열을 UID 내림차순으로 반환함. 다음
 페이지는 현재 결과의 마지막 UID를 `olderThanUid`로 지정하여 조회하며, 별표
 상태와 이메일 원본 크기 범위를 검색 조건으로 지정할 수 있음.
+
+메일 후속 조치 ledger는 SQLite에 저장됨. 본문과 첨부파일 내용은 저장하지
+않고, 제한된 표시용 제목/발신자 snapshot과 Message-ID, UIDVALIDITY/UID,
+HMAC 기반 hash를 저장함. `MailAction.status`는 후속 조치 workflow 단계만
+표현하고, 정리 lifecycle과 Todoist sync 상태는 별도 필드로 관리함.
 
 ## 검증
 

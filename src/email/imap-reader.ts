@@ -13,6 +13,7 @@ import type {
   Mailbox,
   MailboxCreateResult,
   MailboxRenameResult,
+  MailboxStatus,
   MailboxSubscriptionResult,
   MoveEmailResult,
   QuotaResult,
@@ -84,6 +85,27 @@ export class ImapEmailReader implements EmailReader {
               }
             }
           : {})
+      };
+    });
+  }
+
+  async getMailboxStatus(mailbox: string): Promise<MailboxStatus> {
+    return this.withClient(async (client) => {
+      const status = await client.status(mailbox, {
+        messages: true,
+        uidNext: true,
+        uidValidity: true,
+        highestModseq: true
+      });
+      const uidValidity = status.uidValidity?.toString() ?? null;
+      const highestModseq = status.highestModseq?.toString() ?? null;
+      return {
+        mailbox: status.path,
+        uidValidity,
+        uidValidityUsable: uidValidity !== null && uidValidity !== "0",
+        uidNext: status.uidNext ?? null,
+        exists: status.messages ?? 0,
+        highestModseq
       };
     });
   }

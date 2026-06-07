@@ -18,6 +18,7 @@ const config: Config = {
     signingSecret: "s".repeat(32)
   },
   policyPath: `/tmp/mmcp-app-test-policy-${process.pid}.json`,
+  workflowDbPath: `/tmp/mmcp-app-test-workflow-${process.pid}.sqlite`,
   imap: {
     host: "imap.naver.com",
     port: 993,
@@ -37,6 +38,14 @@ const emailReader: EmailReader = {
   })),
   getQuota: vi.fn(async (mailbox) => ({ supported: false, mailbox })),
   listMailboxes: vi.fn(async () => []),
+  getMailboxStatus: vi.fn(async (mailbox) => ({
+    mailbox,
+    uidValidity: "123",
+    uidValidityUsable: true,
+    uidNext: 456,
+    exists: 7,
+    highestModseq: null
+  })),
   searchEmails: vi.fn(async () => []),
   getEmail: vi.fn(async (mailbox, uid) => ({
     mailbox,
@@ -101,6 +110,7 @@ afterEach(async () => {
 
 afterAll(() => {
   rmSync(config.policyPath, { force: true });
+  rmSync(config.workflowDbPath, { force: true });
 });
 
 describe("HTTP app", () => {

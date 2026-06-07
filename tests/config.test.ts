@@ -26,6 +26,7 @@ describe("loadConfig", () => {
     expect(config.maxEmailBytes).toBe(5 * 1024 * 1024);
     expect(config.publicUrl.href).toBe("https://mail.example.com/mcp");
     expect(config.policyPath).toBe(join(homedir(), ".config/mmcp/mail-policy.json"));
+    expect(config.workflowDbPath).toBe(join(homedir(), ".config/mmcp/workflow.sqlite"));
   });
 
   it("필수 비밀값이 없으면 오류를 발생시킴", () => {

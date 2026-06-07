@@ -30,6 +30,44 @@ const mailboxes = [
 ];
 
 describe("IMAP 이메일 상태 관리", () => {
+  it("편지함 상태를 bigint-safe 문자열과 숫자로 반환함", async () => {
+    const fake = createFakeClient();
+    const reader = createReader(fake.client);
+
+    await expect(reader.getMailboxStatus("INBOX")).resolves.toEqual({
+      mailbox: "INBOX",
+      uidValidity: "12345678901234567890",
+      uidValidityUsable: true,
+      uidNext: 43,
+      exists: 10,
+      highestModseq: "999999999999999999"
+    });
+    expect(fake.status).toHaveBeenCalledWith("INBOX", {
+      messages: true,
+      uidNext: true,
+      uidValidity: true,
+      highestModseq: true
+    });
+  });
+
+  it("UIDVALIDITY 0은 ledger 위치 매칭에 사용할 수 없는 값으로 표시함", async () => {
+    const fake = createFakeClient();
+    fake.status.mockResolvedValueOnce({
+      path: "INBOX",
+      uidValidity: 0n
+    });
+    const reader = createReader(fake.client);
+
+    await expect(reader.getMailboxStatus("INBOX")).resolves.toEqual({
+      mailbox: "INBOX",
+      uidValidity: "0",
+      uidValidityUsable: false,
+      uidNext: null,
+      exists: 0,
+      highestModseq: null
+    });
+  });
+
   it("읽음 상태에 따라 Seen flag를 추가하거나 제거함", async () => {
     const fake = createFakeClient();
     const reader = createReader(fake.client);
@@ -206,12 +244,26 @@ function createFakeClient(mailboxList = mailboxes) {
   const mailboxRename = vi.fn(async (path: string, newPath: string) => ({ path, newPath }));
   const mailboxSubscribe = vi.fn(async () => true);
   const mailboxUnsubscribe = vi.fn(async () => true);
+  const status = vi.fn(async (mailbox: string): Promise<{
+    path: string;
+    uidValidity?: bigint;
+    uidNext?: number;
+    messages?: number;
+    highestModseq?: bigint;
+  }> => ({
+    path: mailbox,
+    uidValidity: 12345678901234567890n,
+    uidNext: 43,
+    messages: 10,
+    highestModseq: 999999999999999999n
+  }));
 
   const client = {
     usable: true,
     connect: vi.fn(async () => undefined),
     logout: vi.fn(async () => true),
     close: vi.fn(),
+    status,
     list: vi.fn(async () => mailboxList),
     getMailboxLock: vi.fn(async (mailbox: string) => {
       selectedMailbox = mailbox;
@@ -238,6 +290,7 @@ function createFakeClient(mailboxList = mailboxes) {
     messageCopy,
     mailboxCreate,
     mailboxRename,
+    status,
     mailboxSubscribe,
     mailboxUnsubscribe
   };

@@ -10,6 +10,7 @@ import { rateLimit } from "express-rate-limit";
 
 import type { Config } from "./config.js";
 import type { EmailReader } from "./email/types.js";
+import { SqliteLedgerStore } from "./ledger/sqlite-ledger-store.js";
 import { createMcpServer } from "./mcp-server.js";
 import { PersonalOAuthProvider } from "./oauth-provider.js";
 import { PolicyStore } from "./policy-store.js";
@@ -23,6 +24,7 @@ export function createApp(config: Config, emailReader: EmailReader) {
     resourceUrl: config.publicUrl
   });
   const policyStore = new PolicyStore(config.policyPath);
+  const ledgerStore = new SqliteLedgerStore(config.workflowDbPath);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(config.publicUrl);
 
   app.use(mcpAuthRouter({
@@ -61,7 +63,8 @@ export function createApp(config: Config, emailReader: EmailReader) {
 
     const server = createMcpServer(emailReader, {
       grantedScopes: request.auth?.scopes ?? [],
-      policyStore
+      policyStore,
+      ledgerStore
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

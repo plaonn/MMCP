@@ -3,6 +3,14 @@ import { z } from "zod";
 
 import type { EmailDetail, EmailReader } from "./email/types.js";
 import {
+  type LedgerStore,
+  mailActionPriorities,
+  mailActionStatuses,
+  mailActionTypes,
+  mailCleanupStatuses,
+  todoistSyncStatuses
+} from "./ledger/types.js";
+import {
   type PolicyPatchPreview,
   type PolicyStore,
   policyPatchOperationSchema
@@ -112,6 +120,90 @@ const moveOperationsSchema = bulkOperationsSchema(
 );
 const emailOperationsSchema = bulkOperationsSchema(emailOperationSchema, emailKey);
 const emailReadOperationsSchema = bulkOperationsSchema(emailOperationSchema, emailKey, 20);
+const actionIdSchema = z.string().uuid();
+const mailActionStatusSchema = z.enum(mailActionStatuses);
+const mailActionTypeSchema = z.enum(mailActionTypes);
+const mailCleanupStatusSchema = z.enum(mailCleanupStatuses);
+const todoistSyncStatusSchema = z.enum(todoistSyncStatuses);
+const mailActionPrioritySchema = z.enum(mailActionPriorities);
+const actionTagsSchema = z.array(
+  z.string().trim().min(1).max(100).regex(/^[a-z0-9][a-z0-9:_-]{0,99}$/)
+).max(30);
+const cleanupConfigPatchSchema = z.object({
+  cleanupOnStartup: z.boolean().optional(),
+  dryRunDefault: z.boolean().optional(),
+  terminalRetentionDays: z.number().int().min(1).max(3650).optional(),
+  staleUnmatchedRetentionDays: z.number().int().min(1).max(3650).optional(),
+  mailboxSnapshotRetentionDays: z.number().int().min(1).max(3650).optional(),
+  todoistExportLogRetentionDays: z.number().int().min(1).max(3650).optional(),
+  vacuumAfterCleanup: z.boolean().optional()
+});
+const upsertMailActionOperationsSchema = bulkOperationsSchema(z.object({
+  id: operationIdSchema,
+  mailbox: mailboxSchema,
+  uid: uidSchema.nullable(),
+  uidValidity: z.string().min(1).max(100).nullable().optional(),
+  uidValidityUsable: z.boolean().optional(),
+  messageId: z.string().min(1).max(1000).nullable().optional(),
+  subject: z.string().max(1000).nullable().optional(),
+  from: z.array(z.string().max(320)).max(20).nullable().optional(),
+  date: z.iso.datetime().nullable().optional(),
+  size: z.number().int().nonnegative().nullable().optional(),
+  status: mailActionStatusSchema.default("candidate"),
+  actionType: mailActionTypeSchema.default("review"),
+  cleanupStatus: mailCleanupStatusSchema.default("none"),
+  cleanupConfig: cleanupConfigPatchSchema.nullable().optional(),
+  displaySubject: z.string().max(200).nullable().optional(),
+  displayFrom: z.string().max(320).nullable().optional(),
+  summary: z.string().max(500).nullable().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  dueAt: z.iso.datetime().nullable().optional(),
+  deferredUntil: z.iso.datetime().nullable().optional(),
+  priority: mailActionPrioritySchema.default("normal"),
+  tags: actionTagsSchema.default([]),
+  todoistSyncStatus: todoistSyncStatusSchema.default("not_needed")
+}), (operation) => {
+  if (operation.uid !== null) {
+    return `${operation.mailbox}\0uid:${operation.uid}`;
+  }
+  if (operation.messageId) {
+    return `${operation.mailbox}\0message:${operation.messageId}`;
+  }
+  return `operation:${operation.id}`;
+});
+const updateMailActionOperationsSchema = bulkOperationsSchema(z.object({
+  id: operationIdSchema,
+  actionId: actionIdSchema,
+  expectedRevision: z.number().int().positive(),
+  status: mailActionStatusSchema.optional(),
+  actionType: mailActionTypeSchema.optional(),
+  cleanupStatus: mailCleanupStatusSchema.optional(),
+  cleanupConfig: cleanupConfigPatchSchema.nullable().optional(),
+  summary: z.string().max(500).nullable().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  dueAt: z.iso.datetime().nullable().optional(),
+  deferredUntil: z.iso.datetime().nullable().optional(),
+  priority: mailActionPrioritySchema.optional(),
+  tags: actionTagsSchema.optional(),
+  todoistSyncStatus: todoistSyncStatusSchema.optional(),
+  todoistTaskId: z.string().min(1).max(200).nullable().optional()
+}), (operation) => operation.actionId);
+const recordMailActionLocationOperationsSchema = bulkOperationsSchema(z.object({
+  id: operationIdSchema,
+  actionId: actionIdSchema,
+  expectedRevision: z.number().int().positive(),
+  mailbox: mailboxSchema,
+  uid: uidSchema.nullable(),
+  uidValidity: z.string().min(1).max(100).nullable().optional(),
+  uidValidityUsable: z.boolean().optional()
+}), (operation) => operation.actionId);
+const recordTodoistSyncOperationsSchema = bulkOperationsSchema(z.object({
+  id: operationIdSchema,
+  actionId: actionIdSchema,
+  expectedRevision: z.number().int().positive(),
+  todoistTaskId: z.string().min(1).max(200).nullable().optional(),
+  todoistSyncStatus: todoistSyncStatusSchema
+}), (operation) => operation.actionId);
 const searchEmailsInputSchema = z.object({
   mailbox: mailboxSchema.default("INBOX"),
   text: z.string().min(1).max(500).optional(),
@@ -142,7 +234,7 @@ const searchEmailsInputSchema = z.object({
 
 export function createMcpServer(
   emailReader: EmailReader,
-  options: { grantedScopes?: string[]; policyStore: PolicyStore }
+  options: { grantedScopes?: string[]; policyStore: PolicyStore; ledgerStore: LedgerStore }
 ): McpServer {
   const server = new McpServer({
     name: "mmcp",
@@ -179,6 +271,76 @@ export function createMcpServer(
     },
     async (extra) =>
       withScope(options, extra, "mail.read", () => bulkDiagnostics.slice())
+  );
+
+  server.registerTool(
+    "get_mailbox_status",
+    {
+      title: "편지함 상태 조회",
+      description:
+        "지정한 편지함의 UIDVALIDITY, UIDNEXT, 메시지 수와 HIGHESTMODSEQ를 bigint-safe JSON으로 조회함",
+      inputSchema: z.object({ mailbox: mailboxSchema.default("INBOX") }),
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
+    },
+    async ({ mailbox }, extra) =>
+      withScope(options, extra, "mail.read", () => emailReader.getMailboxStatus(mailbox))
+  );
+
+  server.registerTool(
+    "search_mail_actions",
+    {
+      title: "메일 후속 조치 상태 검색",
+      description:
+        "MMCP 내부 ledger에 저장된 메일 후속 조치 상태를 검색함. 이메일 본문과 첨부파일 내용은 반환하지 않음",
+      inputSchema: z.object({
+        statuses: z.array(mailActionStatusSchema).max(20).optional(),
+        actionTypes: z.array(mailActionTypeSchema).max(20).optional(),
+        mailbox: mailboxSchema.optional(),
+        tags: actionTagsSchema.optional(),
+        dueBefore: z.iso.datetime().optional(),
+        deferredBefore: z.iso.datetime().optional(),
+        todoistSyncStatus: todoistSyncStatusSchema.optional(),
+        limit: z.number().int().min(1).max(100).default(20)
+      }),
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
+    },
+    async (input, extra) =>
+      withScope(options, extra, "mail.read", () => options.ledgerStore.searchMailActions(input))
+  );
+
+  server.registerTool(
+    "get_mail_action",
+    {
+      title: "메일 후속 조치 상태 상세 조회",
+      description: "MMCP 내부 ledger의 MailAction 상세와 비식별 event 이력을 조회함",
+      inputSchema: z.object({ actionId: actionIdSchema }),
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
+    },
+    async ({ actionId }, extra) =>
+      withScope(options, extra, "mail.read", () => options.ledgerStore.getMailAction(actionId))
+  );
+
+  server.registerTool(
+    "get_todoist_export_candidates",
+    {
+      title: "Todoist 내보내기 후보 조회",
+      description:
+        "MMCP ledger에서 Todoist 사용자-facing action으로 내보낼 후보를 조회함. 서버가 Todoist API를 직접 호출하지 않음",
+      inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20) }),
+      outputSchema: toolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
+    },
+    async ({ limit }, extra) =>
+      withScope(options, extra, "mail.read", () =>
+        options.ledgerStore.getTodoistExportCandidates(limit)
+      )
   );
 
   server.registerTool(
@@ -615,6 +777,98 @@ export function createMcpServer(
       )
   );
 
+  server.registerTool(
+    "upsert_mail_actions",
+    {
+      title: "메일 후속 조치 상태 생성 또는 갱신",
+      description:
+        "최대 100개 메일 후속 조치 상태를 MMCP 내부 ledger에 생성하거나 갱신함. 이메일 본문과 첨부파일 내용은 저장하지 않음",
+      inputSchema: z.object({ operations: upsertMailActionOperationsSchema }),
+      outputSchema: toolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
+    },
+    async ({ operations }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        executeBulkWithResult("upsert_mail_actions", operations, (operation) =>
+          options.ledgerStore.upsertMailAction(operation)
+        )
+      )
+  );
+
+  server.registerTool(
+    "update_mail_actions",
+    {
+      title: "메일 후속 조치 상태 변경",
+      description:
+        "최대 100개 MailAction의 상태, action type, 일정, tag, cleanup config와 Todoist sync metadata를 갱신함",
+      inputSchema: z.object({ operations: updateMailActionOperationsSchema }),
+      outputSchema: toolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
+    },
+    async ({ operations }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        executeBulkWithResult("update_mail_actions", operations, (operation) =>
+          options.ledgerStore.updateMailAction(operation)
+        )
+      )
+  );
+
+  server.registerTool(
+    "record_mail_action_location",
+    {
+      title: "메일 후속 조치 위치 기록",
+      description:
+        "최대 100개 MailAction의 현재 편지함, UID와 UIDVALIDITY를 기록함. 메일 자체를 이동하지 않음",
+      inputSchema: z.object({ operations: recordMailActionLocationOperationsSchema }),
+      outputSchema: toolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
+    },
+    async ({ operations }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        executeBulkWithResult("record_mail_action_location", operations, (operation) =>
+          options.ledgerStore.recordMailActionLocation(operation)
+        )
+      )
+  );
+
+  server.registerTool(
+    "record_todoist_sync_results",
+    {
+      title: "Todoist 동기화 결과 기록",
+      description:
+        "최대 100개 MailAction의 외부 Todoist task ID와 sync 상태를 MMCP ledger에 기록함. 서버가 Todoist API를 직접 호출하지 않음",
+      inputSchema: z.object({ operations: recordTodoistSyncOperationsSchema }),
+      outputSchema: toolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
+    },
+    async ({ operations }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        executeBulkWithResult("record_todoist_sync_results", operations, (operation) =>
+          options.ledgerStore.recordTodoistSyncResult(operation)
+        )
+      )
+  );
+
   return server;
 }
 
@@ -780,6 +1034,57 @@ async function executeBulk<T extends { id: string }>(
   };
 }
 
+async function executeBulkWithResult<T extends { id: string }, R>(
+  toolName: string,
+  operations: T[],
+  execute: (operation: T) => Promise<R> | R
+) {
+  const results: Array<
+    | { id: string; status: "succeeded"; result: R }
+    | { id: string; status: "failed"; code: string; error: string }
+  > = [];
+
+  recordBulkDiagnostic({
+    timestamp: new Date().toISOString(),
+    tool: toolName,
+    phase: "started",
+    attempted: operations.length
+  });
+
+  for (const operation of operations) {
+    try {
+      results.push({
+        id: operation.id,
+        status: "succeeded",
+        result: await execute(operation)
+      });
+    } catch (error) {
+      results.push({
+        id: operation.id,
+        status: "failed",
+        ...ledgerFailure(error)
+      });
+    }
+  }
+
+  const failed = results.filter((result) => result.status === "failed").length;
+  recordBulkDiagnostic({
+    timestamp: new Date().toISOString(),
+    tool: toolName,
+    phase: "completed",
+    attempted: operations.length,
+    succeeded: operations.length - failed,
+    failed
+  });
+
+  return {
+    attempted: operations.length,
+    succeeded: operations.length - failed,
+    failed,
+    results
+  };
+}
+
 async function executeBulkRead<T extends { id: string }>(
   operations: T[],
   execute: (operation: T) => Promise<EmailDetail>,
@@ -909,6 +1214,22 @@ function bulkFailure(error: unknown): { code: string; error: string } {
     : {
         code: "EMAIL_SERVER_REQUEST_FAILED",
         error: "이메일 서버 요청을 처리하지 못함"
+      };
+}
+
+function ledgerFailure(error: unknown): { code: string; error: string } {
+  const message = error instanceof Error ? error.message : "";
+  const knownErrors: Record<string, string> = {
+    "메일 후속 조치 항목을 찾을 수 없음": "MAIL_ACTION_NOT_FOUND",
+    "메일 후속 조치 revision이 최신 상태와 일치하지 않음": "STALE_MAIL_ACTION_REVISION",
+    "허용되지 않는 메일 후속 조치 상태 전이임": "INVALID_MAIL_ACTION_TRANSITION"
+  };
+  const code = knownErrors[message];
+  return code
+    ? { code, error: message }
+    : {
+        code: "MAIL_ACTION_REQUEST_FAILED",
+        error: "메일 후속 조치 요청을 처리하지 못함"
       };
 }
 
