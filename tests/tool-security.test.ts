@@ -10,6 +10,7 @@ describe("tool security compatibility", () => {
       result: {
         tools: [
           { name: "search_emails", inputSchema: { type: "object" } },
+          { name: "get_emails", inputSchema: { type: "object" } },
           { name: "move_emails", inputSchema: { type: "object" } },
           { name: "get_server_capabilities", inputSchema: { type: "object" } },
           { name: "trash_emails", inputSchema: { type: "object" } },
@@ -23,6 +24,7 @@ describe("tool security compatibility", () => {
     expect(addTopLevelToolSecuritySchemes(message)).toMatchObject({
       result: {
         tools: [
+          { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },

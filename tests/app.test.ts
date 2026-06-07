@@ -38,9 +38,22 @@ const emailReader: EmailReader = {
   getQuota: vi.fn(async (mailbox) => ({ supported: false, mailbox })),
   listMailboxes: vi.fn(async () => []),
   searchEmails: vi.fn(async () => []),
-  getEmail: vi.fn(async () => {
-    throw new Error("사용하지 않음");
-  }),
+  getEmail: vi.fn(async (mailbox, uid) => ({
+    mailbox,
+    uid,
+    messageId: "<message@example.com>",
+    subject: "테스트 메일",
+    from: ["sender@example.com"],
+    to: ["user@example.com"],
+    cc: [],
+    replyTo: [],
+    date: "2026-06-07T00:00:00.000Z",
+    size: 1024,
+    flags: [],
+    hasAttachments: false,
+    text: "본문",
+    attachments: []
+  })),
   getEmailHeaders: vi.fn(async (mailbox, uid) => ({ mailbox, uid, headers: "" })),
   getEmailSource: vi.fn(async (mailbox, uid) => ({ mailbox, uid, source: "" })),
   setEmailReadStatus: vi.fn(async (mailbox, uid, read) => ({ mailbox, uid, read })),
@@ -310,6 +323,59 @@ describe("HTTP app", () => {
     expect(bulkResponse.result.content[0]?.text).not.toContain("\n");
     expect(JSON.parse(bulkResponse.result.content[0]?.text ?? "")).toEqual(
       bulkResponse.result.structuredContent
+    );
+
+    const readToolCall = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-03-26"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "get_emails",
+          arguments: {
+            operations: [
+              { id: "read-inbox", mailbox: "INBOX", uid: 42 },
+              { id: "read-other", mailbox: "Other", uid: 7 }
+            ]
+          }
+        }
+      })
+    });
+    expect(readToolCall.status).toBe(200);
+    const readResponse = await readToolCall.json() as {
+      result: {
+        content: Array<{ type: string; text: string }>;
+        structuredContent: {
+          result: {
+            attempted: number;
+            succeeded: number;
+            failed: number;
+            results: Array<Record<string, unknown>>;
+          };
+        };
+      };
+    };
+    expect(readResponse.result.structuredContent).toMatchObject({
+      result: {
+        attempted: 2,
+        succeeded: 2,
+        failed: 0,
+        results: [
+          { id: "read-inbox", status: "succeeded", email: { mailbox: "INBOX", uid: 42 } },
+          { id: "read-other", status: "succeeded", email: { mailbox: "Other", uid: 7 } }
+        ]
+      }
+    });
+    expect(readResponse.result.content[0]?.text).not.toContain("\n");
+    expect(JSON.parse(readResponse.result.content[0]?.text ?? "")).toEqual(
+      readResponse.result.structuredContent
     );
   });
 });

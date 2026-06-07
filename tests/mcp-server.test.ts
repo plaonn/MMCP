@@ -108,6 +108,7 @@ describe("MCP tools", () => {
         "copy_emails",
         "create_mailbox",
         "get_email",
+        "get_emails",
         "get_email_headers",
         "get_email_source",
         "get_bulk_operation_diagnostics",
@@ -141,6 +142,9 @@ describe("MCP tools", () => {
         idempotentHint: true
       });
       expect(result.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
+      expect(result.tools.find((tool) => tool.name === "get_emails")?.annotations).toMatchObject({
+        readOnlyHint: true
+      });
       const bulkToolNames = [
         "copy_emails",
         "mark_emails_as_spam",
@@ -157,6 +161,9 @@ describe("MCP tools", () => {
         );
       }
       expect(result.tools.find((tool) => tool.name === "search_emails")?._meta).toEqual({
+        securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
+      });
+      expect(result.tools.find((tool) => tool.name === "get_emails")?._meta).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
       });
       expect(
@@ -186,6 +193,109 @@ describe("MCP tools", () => {
       expect(result.structuredContent).toMatchObject({
         result: [{ uid: 42, subject: "테스트 메일" }]
       });
+    });
+  });
+
+  it("여러 이메일을 조회하고 개별 실패 후 다음 작업을 계속함", async () => {
+    await withClient(async (client) => {
+      vi.mocked(emailReader.getEmail)
+        .mockRejectedValueOnce(new Error("요청한 이메일을 찾을 수 없음"))
+        .mockRejectedValueOnce(new Error("이메일 크기가 조회 제한(5242880 bytes)을 초과함"))
+        .mockResolvedValueOnce({
+          mailbox: "Other",
+          uid: 7,
+          messageId: "<other@example.com>",
+          subject: "다른 편지함 메일",
+          from: ["sender@example.com"],
+          to: ["user@naver.com"],
+          cc: [],
+          replyTo: [],
+          date: "2026-06-07T00:00:00.000Z",
+          size: 2048,
+          flags: [],
+          hasAttachments: false,
+          text: "다른 본문",
+          attachments: []
+        });
+
+      const result = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [
+            { id: "missing", mailbox: "INBOX", uid: 42 },
+            { id: "too-large", mailbox: "INBOX", uid: 43 },
+            { id: "other", mailbox: "Other", uid: 7 }
+          ]
+        }
+      });
+
+      expect(emailReader.getEmail).toHaveBeenCalledWith("INBOX", 42);
+      expect(emailReader.getEmail).toHaveBeenCalledWith("INBOX", 43);
+      expect(emailReader.getEmail).toHaveBeenCalledWith("Other", 7);
+      expect(result.structuredContent).toEqual({
+        result: {
+          attempted: 3,
+          succeeded: 1,
+          failed: 2,
+          results: [
+            {
+              id: "missing",
+              status: "failed",
+              code: "MESSAGE_NOT_FOUND",
+              error: "요청한 이메일을 찾을 수 없음"
+            },
+            {
+              id: "too-large",
+              status: "failed",
+              code: "EMAIL_TOO_LARGE",
+              error: "이메일 크기가 조회 제한을 초과함"
+            },
+            {
+              id: "other",
+              status: "succeeded",
+              email: expect.objectContaining({
+                mailbox: "Other",
+                uid: 7,
+                subject: "다른 편지함 메일",
+                text: "다른 본문"
+              })
+            }
+          ]
+        }
+      });
+      const content = result.content as Array<{ type: string; text?: string }>;
+      expect(content).toHaveLength(1);
+      expect(content[0]?.text).not.toContain("\n");
+      expect(JSON.parse(content[0]?.text ?? "")).toEqual(result.structuredContent);
+    });
+  });
+
+  it("여러 이메일 조회의 중복과 최대 개수 초과를 실행 전에 거부함", async () => {
+    await withClient(async (client) => {
+      const before = vi.mocked(emailReader.getEmail).mock.calls.length;
+      const duplicate = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: [
+            { id: "first", mailbox: "INBOX", uid: 42 },
+            { id: "second", mailbox: "INBOX", uid: 42 }
+          ]
+        }
+      });
+      const tooMany = await client.callTool({
+        name: "get_emails",
+        arguments: {
+          operations: Array.from({ length: 21 }, (_, index) => ({
+            id: `email-${index}`,
+            mailbox: "INBOX",
+            uid: index + 1
+          }))
+        }
+      });
+
+      expect(duplicate.isError).toBe(true);
+      expect(tooMany.isError).toBe(true);
+      expect(vi.mocked(emailReader.getEmail).mock.calls).toHaveLength(before);
     });
   });
 

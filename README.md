@@ -51,6 +51,7 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `list_mailboxes`: 편지함 목록 조회
 - `search_emails`: 이메일 메타데이터 검색
 - `get_email`: 안전한 텍스트 본문과 첨부파일 메타데이터 조회
+- `get_emails`: 여러 이메일의 안전한 텍스트 본문과 첨부파일 메타데이터 조회
 - `get_email_headers`: 이메일 원본 헤더 조회
 - `get_email_source`: 크기 제한이 적용된 RFC822 원본 조회
 - `set_emails_read_status`: 여러 이메일의 읽음 또는 읽지 않음 상태 변경
@@ -75,6 +76,10 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 고유한 `id`, 출발 편지함, IMAP UID와 필요한 상태 또는 목적지 편지함을 지정함.
 응답은 처리 개수와 작업별 `succeeded` 또는 `failed` 결과를 반환함. 일부
 작업만 성공할 수 있으며 transaction과 rollback은 지원하지 않음.
+
+`get_emails`는 서로 다른 편지함의 이메일을 한 호출에서 최대 20건 조회함.
+성공 결과는 작업별 이메일 상세를 포함하며, 일부 조회가 실패해도 나머지
+조회를 계속함.
 
 ## 검증
 

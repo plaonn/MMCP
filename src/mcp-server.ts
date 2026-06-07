@@ -14,6 +14,27 @@ const operationIdSchema = z.string().min(1).max(100).describe(
   "호출 내에서 고유하며 실패 응답을 원래 작업과 연결하는 작업 식별자"
 );
 const toolOutputSchema = z.object({ result: z.unknown() });
+const emailDetailSchema = z.object({
+  mailbox: mailboxSchema,
+  uid: uidSchema,
+  messageId: z.string().nullable(),
+  subject: z.string().nullable(),
+  from: z.array(z.string()),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  replyTo: z.array(z.string()),
+  date: z.string().nullable(),
+  size: z.number().int().nonnegative(),
+  flags: z.array(z.string()),
+  hasAttachments: z.boolean(),
+  text: z.string(),
+  attachments: z.array(z.object({
+    filename: z.string().nullable(),
+    contentType: z.string(),
+    size: z.number().int().nonnegative(),
+    disposition: z.string().nullable()
+  }))
+});
 const bulkResultSchema = z.object({
   attempted: z.number().int().nonnegative(),
   succeeded: z.number().int().nonnegative(),
@@ -32,6 +53,25 @@ const bulkResultSchema = z.object({
   ]))
 });
 const bulkToolOutputSchema = z.object({ result: bulkResultSchema });
+const bulkEmailReadResultSchema = z.object({
+  attempted: z.number().int().nonnegative(),
+  succeeded: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  results: z.array(z.discriminatedUnion("status", [
+    z.object({
+      id: operationIdSchema,
+      status: z.literal("succeeded"),
+      email: emailDetailSchema
+    }),
+    z.object({
+      id: operationIdSchema,
+      status: z.literal("failed"),
+      code: z.string(),
+      error: z.string()
+    })
+  ]))
+});
+const bulkEmailReadOutputSchema = z.object({ result: bulkEmailReadResultSchema });
 const bulkDiagnostics: Array<{
   timestamp: string;
   tool: string;
@@ -62,6 +102,7 @@ const moveOperationsSchema = bulkOperationsSchema(
   emailKey
 );
 const emailOperationsSchema = bulkOperationsSchema(emailOperationSchema, emailKey);
+const emailReadOperationsSchema = bulkOperationsSchema(emailOperationSchema, emailKey, 20);
 
 export function createMcpServer(
   emailReader: EmailReader,
@@ -280,6 +321,25 @@ export function createMcpServer(
     },
     async ({ mailbox, uid }, extra) =>
       withScope(options, extra, "mail.read", () => emailReader.getEmail(mailbox, uid))
+  );
+
+  server.registerTool(
+    "get_emails",
+    {
+      title: "여러 이메일 조회",
+      description:
+        "최대 20개 이메일의 안전한 텍스트 본문과 첨부파일 메타데이터를 조회함. 일부 조회만 성공할 수 있음",
+      inputSchema: z.object({
+        operations: emailReadOperationsSchema
+      }),
+      outputSchema: bulkEmailReadOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
+    },
+    async ({ operations }, extra) =>
+      withScope(options, extra, "mail.read", () =>
+        executeBulkRead(operations, ({ mailbox, uid }) => emailReader.getEmail(mailbox, uid))
+      )
   );
 
   server.registerTool(
@@ -588,9 +648,10 @@ function toolResult(value: unknown) {
 
 function bulkOperationsSchema<T extends { id: string }>(
   operationSchema: z.ZodType<T>,
-  duplicateKey: (operation: T) => string
+  duplicateKey: (operation: T) => string,
+  maximum = 100
 ) {
-  return z.array(operationSchema).min(1).max(100).superRefine((operations, context) => {
+  return z.array(operationSchema).min(1).max(maximum).superRefine((operations, context) => {
     const ids = new Set<string>();
     const keys = new Set<string>();
 
@@ -672,6 +733,40 @@ async function executeBulk<T extends { id: string }>(
   };
 }
 
+async function executeBulkRead<T extends { id: string }, R>(
+  operations: T[],
+  execute: (operation: T) => Promise<R>
+) {
+  const results: Array<
+    | { id: string; status: "succeeded"; email: R }
+    | { id: string; status: "failed"; code: string; error: string }
+  > = [];
+
+  for (const operation of operations) {
+    try {
+      results.push({
+        id: operation.id,
+        status: "succeeded",
+        email: await execute(operation)
+      });
+    } catch (error) {
+      results.push({
+        id: operation.id,
+        status: "failed",
+        ...bulkFailure(error)
+      });
+    }
+  }
+
+  const failed = results.filter((result) => result.status === "failed").length;
+  return {
+    attempted: operations.length,
+    succeeded: operations.length - failed,
+    failed,
+    results
+  };
+}
+
 function recordBulkDiagnostic(entry: typeof bulkDiagnostics[number]): void {
   bulkDiagnostics.push(entry);
   if (bulkDiagnostics.length > 20) {
@@ -681,8 +776,15 @@ function recordBulkDiagnostic(entry: typeof bulkDiagnostics[number]): void {
 
 function bulkFailure(error: unknown): { code: string; error: string } {
   const message = error instanceof Error ? error.message : "";
+  if (message.startsWith("이메일 크기가 조회 제한(")) {
+    return {
+      code: "EMAIL_TOO_LARGE",
+      error: "이메일 크기가 조회 제한을 초과함"
+    };
+  }
   const knownErrors: Record<string, string> = {
     "요청한 이메일을 찾을 수 없음": "MESSAGE_NOT_FOUND",
+    "이메일 본문을 가져올 수 없음": "EMAIL_CONTENT_UNAVAILABLE",
     "대상 편지함을 찾을 수 없음": "MAILBOX_NOT_FOUND",
     "요청한 특수 편지함을 찾을 수 없음": "SPECIAL_MAILBOX_NOT_FOUND",
     "같은 편지함으로 이동할 수 없음": "SAME_MAILBOX",

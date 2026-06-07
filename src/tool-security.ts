@@ -13,6 +13,7 @@ export const toolScopes: Record<string, "mail.read" | "mail.modify"> = {
   list_mailboxes: "mail.read",
   search_emails: "mail.read",
   get_email: "mail.read",
+  get_emails: "mail.read",
   get_email_headers: "mail.read",
   get_email_source: "mail.read",
   set_emails_read_status: "mail.modify",
