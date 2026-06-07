@@ -572,16 +572,17 @@ function buildInstructions(policyStore: PolicyStore): string {
 }
 
 function toolResult(value: unknown) {
+  const structuredContent = {
+    result: value
+  };
   return {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(value, null, 2)
+        text: JSON.stringify(structuredContent)
       }
     ],
-    structuredContent: {
-      result: value
-    }
+    structuredContent
   };
 }
 

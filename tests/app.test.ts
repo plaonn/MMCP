@@ -269,6 +269,48 @@ describe("HTTP app", () => {
         }
       }
     });
+
+    const operations = Array.from({ length: 5 }, (_, index) => ({
+      id: `move-${index + 1}`,
+      mailbox: "INBOX",
+      uid: index + 1,
+      destinationMailbox: "Target"
+    }));
+    const bulkToolCall = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-03-26"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "move_emails", arguments: { operations } }
+      })
+    });
+    expect(bulkToolCall.status).toBe(200);
+    const bulkResponse = await bulkToolCall.json() as {
+      result: {
+        content: Array<{ type: string; text: string }>;
+        structuredContent: unknown;
+      };
+    };
+    expect(bulkResponse.result.structuredContent).toEqual({
+      result: {
+        attempted: 5,
+        succeeded: 5,
+        failed: 0,
+        results: operations.map(({ id }) => ({ id, status: "succeeded" }))
+      }
+    });
+    expect(bulkResponse.result.content).toHaveLength(1);
+    expect(bulkResponse.result.content[0]?.text).not.toContain("\n");
+    expect(JSON.parse(bulkResponse.result.content[0]?.text ?? "")).toEqual(
+      bulkResponse.result.structuredContent
+    );
   });
 });
 

@@ -141,6 +141,21 @@ describe("MCP tools", () => {
         idempotentHint: true
       });
       expect(result.tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
+      const bulkToolNames = [
+        "copy_emails",
+        "mark_emails_as_spam",
+        "move_emails",
+        "set_emails_flagged_status",
+        "set_emails_read_status",
+        "trash_emails"
+      ];
+      const moveOutputSchema = result.tools.find((tool) => tool.name === "move_emails")?.outputSchema;
+      expect(moveOutputSchema).toBeDefined();
+      for (const toolName of bulkToolNames) {
+        expect(result.tools.find((tool) => tool.name === toolName)?.outputSchema).toEqual(
+          moveOutputSchema
+        );
+      }
       expect(result.tools.find((tool) => tool.name === "search_emails")?._meta).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
       });
@@ -243,6 +258,40 @@ describe("MCP tools", () => {
           ]
         }
       });
+    });
+  });
+
+  it("벌크 이동 응답은 구조화 응답과 같은 완전한 단일행 JSON 텍스트를 반환함", async () => {
+    await withClient(async (client) => {
+      const operations = Array.from({ length: 5 }, (_, index) => ({
+        id: `move-${index + 1}`,
+        mailbox: "INBOX",
+        uid: index + 1,
+        destinationMailbox: "Target"
+      }));
+      const result = await client.callTool({
+        name: "move_emails",
+        arguments: { operations }
+      });
+
+      expect(result.structuredContent).toEqual({
+        result: {
+          attempted: 5,
+          succeeded: 5,
+          failed: 0,
+          results: operations.map(({ id }) => ({ id, status: "succeeded" }))
+        }
+      });
+      const content = result.content as Array<{ type: string; text?: string }>;
+      expect(content).toHaveLength(1);
+      expect(content[0]).toMatchObject({ type: "text" });
+
+      const text = content[0]?.type === "text" ? content[0].text ?? "" : "";
+      expect(text).not.toContain("\n");
+      expect(text).not.toContain("display_url");
+      expect(text).not.toContain("display_title");
+      expect(text).not.toContain('"..."');
+      expect(JSON.parse(text)).toEqual(result.structuredContent);
     });
   });
 

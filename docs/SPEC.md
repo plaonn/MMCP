@@ -176,6 +176,9 @@ token scope만 사용하여 판단함.
 - 모든 입력은 모델이 생성한 텍스트와 독립적으로 검증함.
 - MCP 서버 지침과 도구 annotation에서 조회 도구와 상태 변경 도구를 구분함.
 - 모든 도구는 반환하는 `structuredContent`와 일치하는 output schema를 제공함.
+- 모든 성공 도구 응답의 텍스트 content는 `structuredContent`와 동일한 객체를
+  단일행 JSON으로 반환하여 MCP client가 별도 응답 리소스로 축약할 가능성을
+  줄임.
 - 모든 도구는 OAuth scope를 표준 top-level `securitySchemes`와 호환용 `_meta`
   mirror에 함께 표시함.
 - 인증정보, 원시 인증 오류, 민감한 서버 상세정보를 MCP client에 반환하지
