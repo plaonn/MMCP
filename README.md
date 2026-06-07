@@ -23,7 +23,7 @@ cp .env.example .env
 이메일 주소 및 애플리케이션 비밀번호를 설정함. 실제 비밀값이 들어간 `.env`는
 Git에서 제외됨.
 
-메일 관리 자연어 정책은 기본적으로 `~/.config/mmcp/mail-policy.json`에
+메일 관리 자연어 규칙은 기본적으로 `~/.config/mmcp/mail-policy.json`에
 저장됨. 필요하면 `MMCP_POLICY_PATH`로 저장 경로를 변경함.
 
 네이버 연결만 안전하게 확인하려면 다음 명령을 실행함. 이메일 주소, 편지함
@@ -63,12 +63,12 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `create_mailbox`: 사용자 편지함 생성
 - `rename_mailbox`: 사용자 편지함 이름 변경
 - `set_mailbox_subscription`: 편지함 구독 상태 변경
-- `get_mail_policy`: 최신 메일 관리 자연어 정책 조회
+- `get_mail_rules`: 최신 메일 관리 자연어 규칙 조회
 - `get_bulk_operation_diagnostics`: 현재 프로세스의 최근 벌크 작업 실행 요약 조회
-- `preview_mail_policy_patch`: 규칙 단위 정책 변경 미리보기
-- `apply_mail_policy_patch`: revision이 일치할 때 규칙 단위 정책 변경 적용
-- `get_mail_policy_history`: 최근 정책 revision 조회
-- `revert_mail_policy_revision`: 과거 정책을 새 revision으로 복원
+- `preview_mail_rules_patch`: 규칙 단위 변경 미리보기
+- `apply_mail_rules_patch`: revision이 일치할 때 규칙 단위 변경 적용
+- `get_mail_rules_history`: 최근 규칙 revision 조회
+- `revert_mail_rules_revision`: 과거 규칙 목록을 새 revision으로 복원
 
 영구 삭제, 휴지통 비우기, 편지함 삭제, 메일 발송 기능은 제공하지 않음.
 

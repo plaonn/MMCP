@@ -259,6 +259,37 @@ describe("HTTP app", () => {
     });
     expect(authenticatedMcp.status).not.toBe(401);
 
+    const toolsList = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-03-26"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {}
+      })
+    });
+    expect(toolsList.status).toBe(200);
+    const toolsListResponse = await toolsList.json() as {
+      result: { tools: Array<{ name: string }> };
+    };
+    expect(toolsListResponse.result.tools.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        "get_mail_rules",
+        "preview_mail_rules_patch",
+        "apply_mail_rules_patch",
+        "get_mail_rules_history",
+        "revert_mail_rules_revision"
+      ])
+    );
+    expect(JSON.stringify(toolsListResponse)).not.toContain("policy");
+    expect(JSON.stringify(toolsListResponse)).not.toContain("정책");
+
     const toolCall = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       headers: {

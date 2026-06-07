@@ -105,11 +105,11 @@ export class PolicyStore {
     return this.mutate(() => {
       const store = this.readStore();
       if (store.current.revision !== expectedRevision) {
-        throw new Error("정책 revision이 최신 상태와 일치하지 않음");
+        throw new Error("규칙 revision이 최신 상태와 일치하지 않음");
       }
       const target = store.history.find((snapshot) => snapshot.revision === targetRevision);
       if (!target) {
-        throw new Error("복원할 정책 revision을 찾을 수 없음");
+        throw new Error("복원할 규칙 revision을 찾을 수 없음");
       }
       const next = {
         revision: store.current.revision + 1,
@@ -177,7 +177,7 @@ function createDefaultPolicy(): PolicySnapshot {
 
 function buildPatchPreview(current: PolicySnapshot, patch: PolicyPatch): PolicyPatchPreview {
   if (current.revision !== patch.expectedRevision) {
-    throw new Error("정책 revision이 최신 상태와 일치하지 않음");
+    throw new Error("규칙 revision이 최신 상태와 일치하지 않음");
   }
 
   const rules = current.rules.map((rule) => ({ ...rule }));
@@ -186,13 +186,13 @@ function buildPatchPreview(current: PolicySnapshot, patch: PolicyPatch): PolicyP
       rule.id === (operation.operation === "add" ? operation.rule.id : operation.ruleId)
     );
     if (operation.operation === "add") {
-      if (index >= 0) throw new Error("같은 ID의 정책 규칙이 이미 존재함");
+      if (index >= 0) throw new Error("같은 ID의 메일 관리 규칙이 이미 존재함");
       rules.push({ ...operation.rule });
     } else if (operation.operation === "replace") {
-      if (index < 0) throw new Error("수정할 정책 규칙을 찾을 수 없음");
+      if (index < 0) throw new Error("수정할 메일 관리 규칙을 찾을 수 없음");
       rules[index] = { id: operation.ruleId, text: operation.text };
     } else {
-      if (index < 0) throw new Error("삭제할 정책 규칙을 찾을 수 없음");
+      if (index < 0) throw new Error("삭제할 메일 관리 규칙을 찾을 수 없음");
       rules.splice(index, 1);
     }
   }

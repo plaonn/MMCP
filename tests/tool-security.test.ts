@@ -14,9 +14,9 @@ describe("tool security compatibility", () => {
           { name: "move_emails", inputSchema: { type: "object" } },
           { name: "get_server_capabilities", inputSchema: { type: "object" } },
           { name: "trash_emails", inputSchema: { type: "object" } },
-          { name: "get_mail_policy", inputSchema: { type: "object" } },
+          { name: "get_mail_rules", inputSchema: { type: "object" } },
           { name: "get_bulk_operation_diagnostics", inputSchema: { type: "object" } },
-          { name: "apply_mail_policy_patch", inputSchema: { type: "object" } }
+          { name: "apply_mail_rules_patch", inputSchema: { type: "object" } }
         ]
       }
     };

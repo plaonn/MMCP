@@ -103,7 +103,7 @@ describe("MCP tools", () => {
       const result = await client.listTools();
 
       expect(result.tools.map((tool) => tool.name).sort()).toEqual([
-        "apply_mail_policy_patch",
+        "apply_mail_rules_patch",
         "check_connection",
         "copy_emails",
         "create_mailbox",
@@ -114,20 +114,22 @@ describe("MCP tools", () => {
         "get_bulk_operation_diagnostics",
         "get_quota",
         "get_server_capabilities",
-        "get_mail_policy",
-        "get_mail_policy_history",
+        "get_mail_rules",
+        "get_mail_rules_history",
         "list_mailboxes",
         "mark_emails_as_spam",
         "move_emails",
-        "preview_mail_policy_patch",
+        "preview_mail_rules_patch",
         "rename_mailbox",
-        "revert_mail_policy_revision",
+        "revert_mail_rules_revision",
         "set_emails_flagged_status",
         "set_emails_read_status",
         "set_mailbox_subscription",
         "search_emails",
         "trash_emails"
       ].sort());
+      expect(JSON.stringify(result.tools)).not.toContain("policy");
+      expect(JSON.stringify(result.tools)).not.toContain("정책");
       expect(result.tools.some((tool) => tool.name.includes("delete"))).toBe(false);
       expect(result.tools.find((tool) => tool.name === "trash_emails")?.annotations).toMatchObject({
         readOnlyHint: false,
@@ -520,13 +522,15 @@ describe("MCP tools", () => {
     });
   });
 
-  it("정책을 조회하고 patch를 미리 본 뒤 적용함", async () => {
+  it("메일 관리 규칙을 조회하고 patch를 미리 본 뒤 적용하고 복원함", async () => {
     await withClient(async (client) => {
-      expect(client.getInstructions()).toContain("현재 메일 관리 정책 revision 1");
+      expect(client.getInstructions()).toContain("현재 메일 관리 규칙 revision 1");
       expect(client.getInstructions()).toContain("ask-when-uncertain");
+      expect(client.getInstructions()).not.toContain("policy");
+      expect(client.getInstructions()).not.toContain("정책");
 
       const current = await client.callTool({
-        name: "get_mail_policy",
+        name: "get_mail_rules",
         arguments: {}
       });
       expect(current.structuredContent).toMatchObject({
@@ -541,27 +545,48 @@ describe("MCP tools", () => {
         }]
       };
       const preview = await client.callTool({
-        name: "preview_mail_policy_patch",
+        name: "preview_mail_rules_patch",
         arguments: patch
       });
       expect(preview.structuredContent).toMatchObject({
-        result: { currentRevision: 1, nextRevision: 2 }
+        result: {
+          currentRevision: 1,
+          nextRevision: 2,
+          ruleSet: { revision: 2 }
+        }
       });
+      expect(JSON.stringify(preview.structuredContent)).not.toContain('"policy"');
 
       const applied = await client.callTool({
-        name: "apply_mail_policy_patch",
+        name: "apply_mail_rules_patch",
         arguments: patch
       });
       expect(applied.structuredContent).toMatchObject({
-        result: { currentRevision: 1, nextRevision: 2 }
+        result: {
+          currentRevision: 1,
+          nextRevision: 2,
+          ruleSet: { revision: 2 }
+        }
       });
       expect(
         (await client.callTool({
-          name: "get_mail_policy_history",
+          name: "get_mail_rules_history",
           arguments: { limit: 10 }
         })).structuredContent
       ).toMatchObject({
         result: [{ revision: 2 }, { revision: 1 }]
+      });
+
+      const reverted = await client.callTool({
+        name: "revert_mail_rules_revision",
+        arguments: { expectedRevision: 2, targetRevision: 1 }
+      });
+      expect(reverted.structuredContent).toMatchObject({
+        result: {
+          currentRevision: 2,
+          nextRevision: 3,
+          ruleSet: { revision: 3 }
+        }
       });
     });
   });
