@@ -83,6 +83,56 @@ describe("SqliteLedgerStore", () => {
     });
   });
 
+  it("mail_fingerprint는 mailbox 변경만으로 달라지지 않음", () => {
+    withStore(({ store }) => {
+      const first = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: null,
+        messageId: "<same@example.com>",
+        subject: "동일 메일",
+        from: ["sender@example.com"],
+        date: "2026-06-07T00:00:00.000Z",
+        size: 2048
+      }).action;
+      const moved = store.upsertMailAction({
+        mailbox: "Target",
+        uid: null,
+        messageId: "<same@example.com>",
+        subject: "동일 메일",
+        from: ["sender@example.com"],
+        date: "2026-06-07T00:00:00.000Z",
+        size: 2048
+      }).action;
+
+      expect(moved.id).toBe(first.id);
+      expect(moved.mailFingerprint).toBe(first.mailFingerprint);
+      expect(moved.mailbox).toBe("Target");
+      expect(moved.revision).toBe(2);
+    });
+  });
+
+  it("metadata가 없는 최소 후보는 빈 fingerprint로 서로 병합하지 않음", () => {
+    withStore(({ store }) => {
+      const first = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 1
+      }).action;
+      const second = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 2
+      }).action;
+      const repeated = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 1,
+        summary: "같은 현재 위치 재기록"
+      }).action;
+
+      expect(second.id).not.toBe(first.id);
+      expect(repeated.id).toBe(first.id);
+      expect(repeated.summary).toBe("같은 현재 위치 재기록");
+    });
+  });
+
   it("revision과 허용 상태 전이를 강제함", () => {
     withStore(({ store }) => {
       const created = store.upsertMailAction({

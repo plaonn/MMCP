@@ -106,6 +106,15 @@ const emailReader: EmailReader = {
   setMailboxSubscription: vi.fn(async (path, subscribed) => ({ path, subscribed }))
 };
 
+function emailReaderCallCounts(): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(emailReader).map(([name, mock]) => [
+      name,
+      vi.mocked(mock).mock.calls.length
+    ])
+  );
+}
+
 describe("MCP tools", () => {
   it("조회 및 상태 관리 도구를 제공하고 영구 삭제 도구는 제공하지 않음", async () => {
     await withClient(async (client) => {
@@ -132,6 +141,7 @@ describe("MCP tools", () => {
         "mark_emails_as_spam",
         "move_emails",
         "preview_mail_rules_patch",
+        "record_mail_action_candidates",
         "record_mail_action_location",
         "record_todoist_sync_results",
         "rename_mailbox",
@@ -199,6 +209,40 @@ describe("MCP tools", () => {
       ).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }]
       });
+      expect(result.tools.find((tool) => tool.name === "record_mail_action_candidates"))
+        .toMatchObject({
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true
+          },
+          _meta: { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] },
+          inputSchema: {
+            properties: {
+              operations: {
+                items: {
+                  required: ["id", "mailbox", "uid"],
+                  properties: {
+                    mailbox: { type: "string" },
+                    uid: { type: "integer" },
+                    messageId: {
+                      anyOf: [
+                        expect.objectContaining({ type: "string" }),
+                        { type: "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        });
+      expect(JSON.stringify(
+        result.tools.find((tool) => tool.name === "record_mail_action_candidates")
+      )).not.toContain("subject");
+      expect(JSON.stringify(
+        result.tools.find((tool) => tool.name === "record_mail_action_candidates")
+      )).not.toContain("displaySubject");
     });
   });
 
@@ -367,6 +411,117 @@ describe("MCP tools", () => {
           results: [{
             status: "succeeded",
             result: { action: { status: "done", cleanupStatus: "candidate" } }
+          }]
+        }
+      });
+    });
+  });
+
+  it("후속 조치 후보 기록 도구는 최소 입력으로 기본 candidate를 기록하고 메일 reader를 호출하지 않음", async () => {
+    await withClient(async (client) => {
+      const before = emailReaderCallCounts();
+      const created = await client.callTool({
+        name: "record_mail_action_candidates",
+        arguments: {
+          operations: [{
+            id: "record-candidate-minimal",
+            mailbox: "INBOX",
+            uid: 61546
+          }]
+        }
+      });
+
+      expect(created.structuredContent).toMatchObject({
+        result: {
+          attempted: 1,
+          succeeded: 1,
+          failed: 0,
+          results: [{
+            id: "record-candidate-minimal",
+            status: "succeeded",
+            result: {
+              action: {
+                status: "candidate",
+                actionType: "review",
+                cleanupStatus: "none",
+                mailbox: "INBOX",
+                uid: 61546,
+                uidValidity: null,
+                uidValidityUsable: false,
+                priority: "normal",
+                tags: [],
+                todoistSyncStatus: "not_needed"
+              }
+            }
+          }]
+        }
+      });
+
+      expect(emailReaderCallCounts()).toEqual(before);
+    });
+  });
+
+  it("기존 upsert에서 상태 필드를 생략하면 기존 status와 actionType을 보존함", async () => {
+    await withClient(async (client) => {
+      const created = await client.callTool({
+        name: "upsert_mail_actions",
+        arguments: {
+          operations: [{
+            id: "create-actionable-upsert",
+            mailbox: "INBOX",
+            uid: 100,
+            uidValidity: "123",
+            uidValidityUsable: true,
+            status: "actionable",
+            actionType: "pay",
+            cleanupStatus: "candidate",
+            priority: "high",
+            todoistSyncStatus: "export_ready",
+            tags: ["topic:billing"]
+          }]
+        }
+      });
+      const action = (created.structuredContent as {
+        result: {
+          results: Array<{
+            result: { action: { id: string } };
+          }>;
+        };
+      }).result.results[0]!.result.action;
+
+      const upserted = await client.callTool({
+        name: "upsert_mail_actions",
+        arguments: {
+          operations: [{
+            id: "upsert-without-default-fields",
+            mailbox: "INBOX",
+            uid: 100,
+            uidValidity: "123",
+            uidValidityUsable: true,
+            summary: "요약만 갱신"
+          }]
+        }
+      });
+
+      expect(upserted.structuredContent).toMatchObject({
+        result: {
+          attempted: 1,
+          succeeded: 1,
+          failed: 0,
+          results: [{
+            status: "succeeded",
+            result: {
+              action: {
+                id: action.id,
+                status: "actionable",
+                actionType: "pay",
+                cleanupStatus: "candidate",
+                priority: "high",
+                todoistSyncStatus: "export_ready",
+                tags: ["topic:billing"],
+                summary: "요약만 갱신"
+              }
+            }
           }]
         }
       });
@@ -912,6 +1067,20 @@ describe("MCP tools", () => {
           }]
         }
       });
+      await client.callTool({
+        name: "record_mail_action_candidates",
+        arguments: {
+          operations: [{
+            id: "diagnostic-ledger-operation",
+            mailbox: "INBOX",
+            uid: 61546,
+            messageId: "<sensitive-message@example.com>",
+            summary: "민감한 Todoist 제목 후보",
+            reason: "sender@example.com에서 온 민감한 사유",
+            tags: ["topic:sensitive"]
+          }]
+        }
+      });
       const diagnostics = await client.callTool({
         name: "get_bulk_operation_diagnostics",
         arguments: {}
@@ -927,8 +1096,20 @@ describe("MCP tools", () => {
         succeeded: 1,
         failed: 0
       }));
+      expect(entries).toContainEqual(expect.objectContaining({
+        tool: "record_mail_action_candidates",
+        phase: "completed",
+        attempted: 1,
+        succeeded: 1,
+        failed: 0
+      }));
       expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("INBOX");
       expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("diagnostic-operation");
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("diagnostic-ledger-operation");
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("<sensitive-message@example.com>");
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("sender@example.com");
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("민감한 Todoist 제목 후보");
+      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("topic:sensitive");
     });
   });
 

@@ -444,6 +444,15 @@ export class SqliteLedgerStore implements LedgerStore {
       if (byLocation) return byLocation;
     }
 
+    if (input.uid !== null && !input.hasFallbackIdentity) {
+      const byCurrentLocation = this.database.prepare(`
+        SELECT * FROM mail_actions
+        WHERE mailbox = ? AND uid = ? AND uid_validity_usable = 0 AND message_id IS NULL
+        LIMIT 1
+      `).get(input.mailbox, input.uid) as ActionRow | undefined;
+      if (byCurrentLocation) return byCurrentLocation;
+    }
+
     if (input.messageId) {
       const byMessageId = this.database.prepare(`
         SELECT * FROM mail_actions
@@ -451,6 +460,10 @@ export class SqliteLedgerStore implements LedgerStore {
         LIMIT 1
       `).get(input.messageId, input.mailFingerprint) as ActionRow | undefined;
       if (byMessageId) return byMessageId;
+    }
+
+    if (!input.hasFallbackIdentity) {
+      return null;
     }
 
     const byFingerprint = this.database.prepare(`
@@ -564,6 +577,7 @@ type NormalizedUpsertInput = UpsertMailActionInput & {
   displayFrom: string | null;
   date: string | null;
   size: number | null;
+  hasFallbackIdentity: boolean;
 };
 
 function normalizeUpsertInput(
@@ -572,13 +586,15 @@ function normalizeUpsertInput(
 ): NormalizedUpsertInput {
   const subject = input.subject ?? input.displaySubject ?? null;
   const from = input.from?.join(", ") ?? input.displayFrom ?? null;
+  const hasFallbackIdentity = Boolean(
+    input.messageId || subject || from || input.date || input.size !== undefined && input.size !== null
+  );
   const fingerprintInput = [
     input.messageId ?? "",
     subject ?? "",
     from ?? "",
     input.date ?? "",
-    input.size ?? "",
-    input.mailbox
+    input.size ?? ""
   ].join("\0");
   return {
     ...input,
@@ -593,7 +609,8 @@ function normalizeUpsertInput(
     displayFrom: truncateDisplay(input.displayFrom ?? from, 320),
     date: input.date ?? null,
     size: input.size ?? null,
-    tags: input.tags ?? []
+    tags: input.tags ?? [],
+    hasFallbackIdentity
   };
 }
 

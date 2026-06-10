@@ -149,9 +149,9 @@ const upsertMailActionOperationsSchema = bulkOperationsSchema(z.object({
   from: z.array(z.string().max(320)).max(20).nullable().optional(),
   date: z.iso.datetime().nullable().optional(),
   size: z.number().int().nonnegative().nullable().optional(),
-  status: mailActionStatusSchema.default("candidate"),
-  actionType: mailActionTypeSchema.default("review"),
-  cleanupStatus: mailCleanupStatusSchema.default("none"),
+  status: mailActionStatusSchema.optional(),
+  actionType: mailActionTypeSchema.optional(),
+  cleanupStatus: mailCleanupStatusSchema.optional(),
   cleanupConfig: cleanupConfigPatchSchema.nullable().optional(),
   displaySubject: z.string().max(200).nullable().optional(),
   displayFrom: z.string().max(320).nullable().optional(),
@@ -159,9 +159,9 @@ const upsertMailActionOperationsSchema = bulkOperationsSchema(z.object({
   reason: z.string().max(2000).nullable().optional(),
   dueAt: z.iso.datetime().nullable().optional(),
   deferredUntil: z.iso.datetime().nullable().optional(),
-  priority: mailActionPrioritySchema.default("normal"),
-  tags: actionTagsSchema.default([]),
-  todoistSyncStatus: todoistSyncStatusSchema.default("not_needed")
+  priority: mailActionPrioritySchema.optional(),
+  tags: actionTagsSchema.optional(),
+  todoistSyncStatus: todoistSyncStatusSchema.optional()
 }), (operation) => {
   if (operation.uid !== null) {
     return `${operation.mailbox}\0uid:${operation.uid}`;
@@ -171,6 +171,20 @@ const upsertMailActionOperationsSchema = bulkOperationsSchema(z.object({
   }
   return `operation:${operation.id}`;
 });
+const recordMailActionCandidateOperationsSchema = bulkOperationsSchema(z.object({
+  id: operationIdSchema,
+  mailbox: mailboxSchema,
+  uid: uidSchema,
+  uidValidity: z.string().min(1).max(100).nullable().optional(),
+  uidValidityUsable: z.boolean().optional(),
+  messageId: z.string().min(1).max(1000).nullable().optional(),
+  summary: z.string().max(500).nullable().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  dueAt: z.iso.datetime().nullable().optional(),
+  deferredUntil: z.iso.datetime().nullable().optional(),
+  priority: mailActionPrioritySchema.optional(),
+  tags: actionTagsSchema.optional()
+}), (operation) => `${operation.mailbox}\0${operation.uid}`);
 const updateMailActionOperationsSchema = bulkOperationsSchema(z.object({
   id: operationIdSchema,
   actionId: actionIdSchema,
@@ -782,7 +796,7 @@ export function createMcpServer(
     {
       title: "메일 후속 조치 상태 생성 또는 갱신",
       description:
-        "최대 100개 메일 후속 조치 상태를 MMCP 내부 ledger에 생성하거나 갱신함. 이메일 본문과 첨부파일 내용은 저장하지 않음",
+        "최대 100개 기존 메일에 대한 후속 조치 metadata를 MMCP 내부 ledger에 생성하거나 갱신함. 메일 서버의 읽음·이동·삭제·발송 상태는 변경하지 않으며 이메일 본문·첨부파일·원본은 저장하지 않음. ChatGPT에서는 더 작은 입력의 record_mail_action_candidates를 우선 사용함",
       inputSchema: z.object({ operations: upsertMailActionOperationsSchema }),
       outputSchema: toolOutputSchema,
       annotations: {
@@ -795,6 +809,29 @@ export function createMcpServer(
     async ({ operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
         executeBulkWithResult("upsert_mail_actions", operations, (operation) =>
+          options.ledgerStore.upsertMailAction(operation)
+        )
+      )
+  );
+
+  server.registerTool(
+    "record_mail_action_candidates",
+    {
+      title: "메일 후속 조치 후보 metadata 기록",
+      description:
+        "기존 메일 검색/조회 결과가 가리키는 메일에 대해 MMCP 내부 ledger에 비식별 후속 조치 후보 metadata를 기록함. 메일 서버의 읽음·이동·삭제·발송 상태는 변경하지 않으며, 이메일 본문·첨부·원본은 저장하지 않음",
+      inputSchema: z.object({ operations: recordMailActionCandidateOperationsSchema }),
+      outputSchema: toolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
+    },
+    async ({ operations }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        executeBulkWithResult("record_mail_action_candidates", operations, (operation) =>
           options.ledgerStore.upsertMailAction(operation)
         )
       )

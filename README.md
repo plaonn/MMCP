@@ -75,7 +75,8 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `search_mail_actions`: MMCP 내부 메일 후속 조치 상태 검색
 - `get_mail_action`: 메일 후속 조치 상태 상세 및 비식별 event 이력 조회
 - `get_todoist_export_candidates`: Todoist로 내보낼 후속 조치 후보 조회
-- `upsert_mail_actions`: 메일 후속 조치 상태 생성 또는 갱신
+- `record_mail_action_candidates`: ChatGPT 권장 경로로 기존 메일에 대한 후속 조치 후보 metadata 기록
+- `upsert_mail_actions`: 저수준 호환 도구로 메일 후속 조치 metadata 생성 또는 갱신
 - `update_mail_actions`: 메일 후속 조치 상태, 일정, tag와 sync 정보 갱신
 - `record_mail_action_location`: 메일 후속 조치의 현재 편지함/UID 위치 기록
 - `record_todoist_sync_results`: 외부 Todoist task ID와 sync 상태 기록
@@ -101,6 +102,13 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 않고, 제한된 표시용 제목/발신자 snapshot과 Message-ID, UIDVALIDITY/UID,
 HMAC 기반 hash를 저장함. `MailAction.status`는 후속 조치 workflow 단계만
 표현하고, 정리 lifecycle과 Todoist sync 상태는 별도 필드로 관리함.
+
+ChatGPT에서 새 후속 조치 후보를 기록할 때는 `record_mail_action_candidates`를
+우선 사용함. 이 도구는 기존 메일의 `mailbox`와 `uid`를 기준으로 MMCP 내부
+ledger metadata만 기록하고 메일 서버의 읽음·이동·삭제·발송 상태를 변경하지
+않음. `upsert_mail_actions`는 더 많은 필드를 받는 저수준 호환 도구임.
+`uid: null`과 Message-ID만 사용하는 synthetic self-test는 ChatGPT 경유 기본
+검증에서 사용하지 않고 로컬/mock 테스트 대상으로만 다룸.
 
 ## 검증
 

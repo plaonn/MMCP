@@ -21,6 +21,7 @@ export const toolScopes: Record<string, "mail.read" | "mail.modify"> = {
   get_mail_action: "mail.read",
   get_todoist_export_candidates: "mail.read",
   upsert_mail_actions: "mail.modify",
+  record_mail_action_candidates: "mail.modify",
   update_mail_actions: "mail.modify",
   record_mail_action_location: "mail.modify",
   record_todoist_sync_results: "mail.modify",
