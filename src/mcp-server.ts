@@ -141,6 +141,8 @@ const cleanupConfigPatchSchema = z.object({
 const upsertMailActionOperationsSchema = bulkOperationsSchema(z.object({
   id: operationIdSchema,
   mailbox: mailboxSchema,
+  sourceMailbox: mailboxSchema.nullable().optional(),
+  legacyMailbox: mailboxSchema.nullable().optional(),
   uid: uidSchema.nullable(),
   uidValidity: z.string().min(1).max(100).nullable().optional(),
   uidValidityUsable: z.boolean().optional(),
@@ -174,16 +176,7 @@ const upsertMailActionOperationsSchema = bulkOperationsSchema(z.object({
 const recordMailActionCandidateOperationsSchema = bulkOperationsSchema(z.object({
   id: operationIdSchema,
   mailbox: mailboxSchema,
-  uid: uidSchema,
-  uidValidity: z.string().min(1).max(100).nullable().optional(),
-  uidValidityUsable: z.boolean().optional(),
-  messageId: z.string().min(1).max(1000).nullable().optional(),
-  summary: z.string().max(500).nullable().optional(),
-  reason: z.string().max(2000).nullable().optional(),
-  dueAt: z.iso.datetime().nullable().optional(),
-  deferredUntil: z.iso.datetime().nullable().optional(),
-  priority: mailActionPrioritySchema.optional(),
-  tags: actionTagsSchema.optional()
+  uid: uidSchema
 }), (operation) => `${operation.mailbox}\0${operation.uid}`);
 const updateMailActionOperationsSchema = bulkOperationsSchema(z.object({
   id: operationIdSchema,
@@ -817,9 +810,9 @@ export function createMcpServer(
   server.registerTool(
     "record_mail_action_candidates",
     {
-      title: "메일 후속 조치 후보 metadata 기록",
+      title: "메일 후속 조치 후보 기록",
       description:
-        "기존 메일 검색/조회 결과가 가리키는 메일에 대해 MMCP 내부 ledger에 비식별 후속 조치 후보 metadata를 기록함. 메일 서버의 읽음·이동·삭제·발송 상태는 변경하지 않으며, 이메일 본문·첨부·원본은 저장하지 않음",
+        "기존 메일 검색 결과의 mailbox와 UID를 사용하여 MMCP 내부 ledger에 후속 조치 후보를 기록함. 상세 metadata는 update_mail_actions로 별도 갱신함. 메일 서버 상태는 변경하지 않음",
       inputSchema: z.object({ operations: recordMailActionCandidateOperationsSchema }),
       outputSchema: toolOutputSchema,
       annotations: {

@@ -85,6 +85,8 @@ export type MailIdentityInput = {
 };
 
 export type UpsertMailActionInput = MailIdentityInput & {
+  sourceMailbox?: string | null;
+  legacyMailbox?: string | null;
   status?: MailActionStatus;
   actionType?: MailActionType;
   cleanupStatus?: MailCleanupStatus;
@@ -151,6 +153,8 @@ export type MailAction = {
   cleanupStatus: MailCleanupStatus;
   cleanupConfig: CleanupConfig;
   mailbox: string;
+  sourceMailbox: string | null;
+  legacyMailbox: string | null;
   uid: number | null;
   uidValidity: string | null;
   uidValidityUsable: boolean;

@@ -25,6 +25,10 @@ MMCP 서버 내부에 후속 조치 상태의 정본이 필요함.
   연동 상태는 `todoistSyncStatus`로 분리함.
 - migration 출처, legacy 편지함 이름, 불확실성 같은 부가 판단은 canonical
   status가 아니라 `tags`나 metadata로 보존함.
+- `GPT 검토/*` migration 출처는 현재 메일 위치와 분리한 `sourceMailbox`,
+  `legacyMailbox` metadata로 보존하여 이후 이동 후에도 유지함.
+- ChatGPT 경유 신규 후보 기록은 mailbox와 UID만 받는 최소 도구로 분리하고,
+  상세 metadata는 action ID와 revision 기반 갱신 도구로 변경함.
 - 이메일 본문과 첨부파일 내용은 ledger에 저장하지 않음.
 
 ## 결과

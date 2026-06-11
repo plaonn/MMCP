@@ -224,13 +224,7 @@ describe("MCP tools", () => {
                   required: ["id", "mailbox", "uid"],
                   properties: {
                     mailbox: { type: "string" },
-                    uid: { type: "integer" },
-                    messageId: {
-                      anyOf: [
-                        expect.objectContaining({ type: "string" }),
-                        { type: "null" }
-                      ]
-                    }
+                    uid: { type: "integer" }
                   }
                 }
               }
@@ -239,10 +233,9 @@ describe("MCP tools", () => {
         });
       expect(JSON.stringify(
         result.tools.find((tool) => tool.name === "record_mail_action_candidates")
-      )).not.toContain("subject");
-      expect(JSON.stringify(
-        result.tools.find((tool) => tool.name === "record_mail_action_candidates")
-      )).not.toContain("displaySubject");
+      )).not.toMatch(
+        /messageId|uidValidity|summary|reason|dueAt|deferredUntil|priority|tags|subject/
+      );
     });
   });
 
@@ -309,6 +302,8 @@ describe("MCP tools", () => {
           operations: [{
             id: "create-ledger-action",
             mailbox: "INBOX",
+            sourceMailbox: "GPT 검토/MMCP 개선",
+            legacyMailbox: "GPT 검토/MMCP 개선",
             uid: 42,
             uidValidity: "123",
             uidValidityUsable: true,
@@ -350,6 +345,8 @@ describe("MCP tools", () => {
                 status: "actionable",
                 actionType: "pay",
                 mailbox: "INBOX",
+                sourceMailbox: "GPT 검토/MMCP 개선",
+                legacyMailbox: "GPT 검토/MMCP 개선",
                 uid: 42,
                 uidValidity: "123",
                 uidValidityUsable: true,
@@ -458,6 +455,42 @@ describe("MCP tools", () => {
       });
 
       expect(emailReaderCallCounts()).toEqual(before);
+
+      const action = (created.structuredContent as {
+        result: {
+          results: Array<{
+            result: { action: { id: string; revision: number } };
+          }>;
+        };
+      }).result.results[0]!.result.action;
+      const updated = await client.callTool({
+        name: "update_mail_actions",
+        arguments: {
+          operations: [{
+            id: "update-candidate-metadata",
+            actionId: action.id,
+            expectedRevision: action.revision,
+            summary: "후속 조치 후보 설명",
+            reason: "별도 metadata 갱신 검증",
+            tags: ["test:candidate-metadata"]
+          }]
+        }
+      });
+      expect(updated.structuredContent).toMatchObject({
+        result: {
+          succeeded: 1,
+          results: [{
+            result: {
+              action: {
+                id: action.id,
+                summary: "후속 조치 후보 설명",
+                reason: "별도 metadata 갱신 검증",
+                tags: ["test:candidate-metadata"]
+              }
+            }
+          }]
+        }
+      });
     });
   });
 
@@ -1073,11 +1106,7 @@ describe("MCP tools", () => {
           operations: [{
             id: "diagnostic-ledger-operation",
             mailbox: "INBOX",
-            uid: 61546,
-            messageId: "<sensitive-message@example.com>",
-            summary: "민감한 Todoist 제목 후보",
-            reason: "sender@example.com에서 온 민감한 사유",
-            tags: ["topic:sensitive"]
+            uid: 61546
           }]
         }
       });
@@ -1106,10 +1135,6 @@ describe("MCP tools", () => {
       expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("INBOX");
       expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("diagnostic-operation");
       expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("diagnostic-ledger-operation");
-      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("<sensitive-message@example.com>");
-      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("sender@example.com");
-      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("민감한 Todoist 제목 후보");
-      expect(JSON.stringify(diagnostics.structuredContent)).not.toContain("topic:sensitive");
     });
   });
 

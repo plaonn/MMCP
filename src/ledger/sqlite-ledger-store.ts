@@ -30,6 +30,8 @@ type ActionRow = {
   cleanup_status: MailCleanupStatus;
   cleanup_config_json: string;
   mailbox: string;
+  source_mailbox: string | null;
+  legacy_mailbox: string | null;
   uid: number | null;
   uid_validity: string | null;
   uid_validity_usable: 0 | 1;
@@ -66,7 +68,7 @@ type EventRow = {
   metadata_json: string;
 };
 
-const schemaVersion = 1;
+const schemaVersion = 2;
 const allowedTransitions: Record<MailActionStatus, MailActionStatus[]> = {
   candidate: ["actionable", "not_actionable", "dismissed", "deferred", "failed"],
   actionable: ["waiting", "deferred", "done", "dismissed", "failed"],
@@ -158,13 +160,13 @@ export class SqliteLedgerStore implements LedgerStore {
     this.database.prepare(`
       INSERT INTO mail_actions (
         id, status, action_type, cleanup_status, cleanup_config_json,
-        mailbox, uid, uid_validity, uid_validity_usable,
+        mailbox, source_mailbox, legacy_mailbox, uid, uid_validity, uid_validity_usable,
         message_id, mail_fingerprint, subject_hash, from_hash,
         display_subject, display_from, display_date, display_size,
         summary, reason, due_at, deferred_until, priority, tags_json,
         todoist_task_id, todoist_sync_status,
         created_at, updated_at, last_seen_at, completed_at, revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       status,
@@ -172,6 +174,8 @@ export class SqliteLedgerStore implements LedgerStore {
       normalized.cleanupStatus ?? "none",
       JSON.stringify(cleanupConfig),
       normalized.mailbox,
+      normalized.sourceMailbox ?? null,
+      normalized.legacyMailbox ?? null,
       normalized.uid,
       normalized.uidValidity,
       normalized.uidValidityUsable ? 1 : 0,
@@ -320,16 +324,38 @@ export class SqliteLedgerStore implements LedgerStore {
     const current = this.getActionRow(input.actionId);
     assertRevision(current, input.expectedRevision);
     const now = new Date().toISOString();
+    let nextStatus = current.status;
+    let nextCleanupStatus = current.cleanup_status;
+    let nextSyncStatus = input.todoistSyncStatus;
+    if (input.todoistSyncStatus === "completed_external") {
+      if (current.status === "done" || allowedTransitions[current.status].includes("done")) {
+        nextStatus = "done";
+        nextCleanupStatus = "candidate";
+      } else {
+        nextSyncStatus = "sync_conflict";
+      }
+    }
     this.database.prepare(`
       UPDATE mail_actions
-      SET todoist_task_id = ?,
+      SET status = ?,
+          cleanup_status = ?,
+          todoist_task_id = ?,
           todoist_sync_status = ?,
           updated_at = ?,
+          completed_at = ?,
           revision = revision + 1
       WHERE id = ?
-    `).run(input.todoistTaskId ?? null, input.todoistSyncStatus, now, input.actionId);
-    this.recordEvent(input.actionId, "todoist_synced", current.status, current.status, {
-      syncStatus: input.todoistSyncStatus
+    `).run(
+      nextStatus,
+      nextCleanupStatus,
+      input.todoistTaskId ?? null,
+      nextSyncStatus,
+      now,
+      nextStatus === "done" ? current.completed_at ?? now : current.completed_at,
+      input.actionId
+    );
+    this.recordEvent(input.actionId, "todoist_synced", current.status, nextStatus, {
+      syncStatus: nextSyncStatus
     });
     return { action: mapAction(this.getActionRow(input.actionId)) };
   }
@@ -352,6 +378,8 @@ export class SqliteLedgerStore implements LedgerStore {
         cleanup_status TEXT NOT NULL,
         cleanup_config_json TEXT NOT NULL,
         mailbox TEXT NOT NULL,
+        source_mailbox TEXT,
+        legacy_mailbox TEXT,
         uid INTEGER,
         uid_validity TEXT,
         uid_validity_usable INTEGER NOT NULL DEFAULT 0,
@@ -408,11 +436,22 @@ export class SqliteLedgerStore implements LedgerStore {
         updated_at TEXT NOT NULL
       );
     `);
+    this.ensureColumn("mail_actions", "source_mailbox", "TEXT");
+    this.ensureColumn("mail_actions", "legacy_mailbox", "TEXT");
     this.database.prepare(`
       INSERT INTO ledger_metadata (key, value)
       VALUES ('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `).run(String(schemaVersion));
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((existing) => existing.name === column)) {
+      this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   private getOrCreateSalt(): string {
@@ -494,6 +533,8 @@ export class SqliteLedgerStore implements LedgerStore {
           cleanup_status = ?,
           cleanup_config_json = ?,
           mailbox = ?,
+          source_mailbox = ?,
+          legacy_mailbox = ?,
           uid = ?,
           uid_validity = ?,
           uid_validity_usable = ?,
@@ -519,6 +560,8 @@ export class SqliteLedgerStore implements LedgerStore {
       input.cleanupStatus ?? current.cleanup_status,
       JSON.stringify(cleanupConfig),
       input.mailbox,
+      input.sourceMailbox !== undefined ? input.sourceMailbox : current.source_mailbox,
+      input.legacyMailbox !== undefined ? input.legacyMailbox : current.legacy_mailbox,
       input.uid,
       input.uidValidity,
       input.uidValidityUsable ? 1 : 0,
@@ -622,6 +665,8 @@ function mapAction(row: ActionRow): MailAction {
     cleanupStatus: row.cleanup_status,
     cleanupConfig: parseCleanupConfig(row.cleanup_config_json),
     mailbox: row.mailbox,
+    sourceMailbox: row.source_mailbox,
+    legacyMailbox: row.legacy_mailbox,
     uid: row.uid,
     uidValidity: row.uid_validity,
     uidValidityUsable: Boolean(row.uid_validity_usable),

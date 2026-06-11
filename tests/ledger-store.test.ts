@@ -1,12 +1,44 @@
 import { mkdtempSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, it } from "vitest";
 
 import { SqliteLedgerStore } from "../src/ledger/sqlite-ledger-store.js";
 
 describe("SqliteLedgerStore", () => {
+  it("schema v1 DB에 migration 출처 열을 자동 추가함", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mmcp-ledger-migration-test-"));
+    const path = join(directory, "workflow.sqlite");
+    const initialStore = new SqliteLedgerStore(path);
+    initialStore.close();
+
+    const legacyDatabase = new DatabaseSync(path);
+    legacyDatabase.exec(`
+      ALTER TABLE mail_actions DROP COLUMN source_mailbox;
+      ALTER TABLE mail_actions DROP COLUMN legacy_mailbox;
+      UPDATE ledger_metadata SET value = '1' WHERE key = 'schema_version';
+    `);
+    legacyDatabase.close();
+
+    const migratedStore = new SqliteLedgerStore(path);
+    try {
+      expect(migratedStore.upsertMailAction({
+        mailbox: "INBOX",
+        sourceMailbox: "GPT 검토",
+        legacyMailbox: "GPT 검토",
+        uid: 42
+      }).action).toMatchObject({
+        sourceMailbox: "GPT 검토",
+        legacyMailbox: "GPT 검토"
+      });
+    } finally {
+      migratedStore.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("DB 파일을 개인 권한으로 만들고 MailAction을 upsert/search함", () => {
     withStore(({ store, path }) => {
       const created = store.upsertMailAction({
@@ -133,6 +165,77 @@ describe("SqliteLedgerStore", () => {
     });
   });
 
+  it("migration 출처는 현재 위치가 바뀐 뒤에도 보존함", () => {
+    withStore(({ store }) => {
+      const created = store.upsertMailAction({
+        mailbox: "GPT 검토/MMCP 개선",
+        sourceMailbox: "GPT 검토/MMCP 개선",
+        legacyMailbox: "GPT 검토/MMCP 개선",
+        uid: 42,
+        uidValidity: "123",
+        uidValidityUsable: true
+      }).action;
+      const moved = store.recordMailActionLocation({
+        actionId: created.id,
+        expectedRevision: created.revision,
+        mailbox: "INBOX",
+        uid: 100,
+        uidValidity: "456",
+        uidValidityUsable: true
+      }).action;
+
+      expect(moved).toMatchObject({
+        mailbox: "INBOX",
+        sourceMailbox: "GPT 검토/MMCP 개선",
+        legacyMailbox: "GPT 검토/MMCP 개선"
+      });
+    });
+  });
+
+  it("중복 Message-ID라도 fingerprint가 다르면 자동 병합하지 않음", () => {
+    withStore(({ store }) => {
+      const first = store.upsertMailAction({
+        mailbox: "GPT 검토",
+        uid: 1,
+        uidValidity: "0",
+        uidValidityUsable: false,
+        messageId: "<duplicate@example.com>",
+        subject: "첫 번째"
+      }).action;
+      const second = store.upsertMailAction({
+        mailbox: "GPT 검토",
+        uid: 2,
+        uidValidity: "0",
+        uidValidityUsable: false,
+        messageId: "<duplicate@example.com>",
+        subject: "두 번째"
+      }).action;
+
+      expect(second.id).not.toBe(first.id);
+    });
+  });
+
+  it("응답 누락 후 같은 identity를 다시 기록해도 event 이력으로 결과를 재조회함", () => {
+    withStore(({ store }) => {
+      store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 42,
+        uidValidity: "123",
+        uidValidityUsable: true
+      });
+      const retried = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 42,
+        uidValidity: "123",
+        uidValidityUsable: true
+      }).action;
+      const detail = store.getMailAction(retried.id);
+
+      expect(retried.revision).toBe(2);
+      expect(detail.events.map((event) => event.eventType)).toEqual(["created", "upserted"]);
+    });
+  });
+
   it("revision과 허용 상태 전이를 강제함", () => {
     withStore(({ store }) => {
       const created = store.upsertMailAction({
@@ -224,6 +327,63 @@ describe("SqliteLedgerStore", () => {
         todoistTaskId: "task-1",
         todoistSyncStatus: "exported",
         revision: 2
+      });
+    });
+  });
+
+  it("Todoist 외부 삭제와 완료를 action 손실 없이 기록함", () => {
+    withStore(({ store }) => {
+      const deletedCandidate = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 1,
+        status: "actionable",
+        todoistSyncStatus: "exported"
+      }).action;
+      const deleted = store.recordTodoistSyncResult({
+        actionId: deletedCandidate.id,
+        expectedRevision: deletedCandidate.revision,
+        todoistSyncStatus: "deleted_external"
+      }).action;
+      expect(deleted).toMatchObject({
+        id: deletedCandidate.id,
+        status: "actionable",
+        todoistSyncStatus: "deleted_external"
+      });
+
+      const completedCandidate = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 2,
+        status: "actionable",
+        cleanupStatus: "none",
+        todoistSyncStatus: "exported"
+      }).action;
+      const completed = store.recordTodoistSyncResult({
+        actionId: completedCandidate.id,
+        expectedRevision: completedCandidate.revision,
+        todoistSyncStatus: "completed_external"
+      }).action;
+      expect(completed).toMatchObject({
+        id: completedCandidate.id,
+        status: "done",
+        cleanupStatus: "candidate",
+        todoistSyncStatus: "completed_external"
+      });
+
+      const conflictingCandidate = store.upsertMailAction({
+        mailbox: "INBOX",
+        uid: 3,
+        status: "candidate",
+        todoistSyncStatus: "exported"
+      }).action;
+      const conflict = store.recordTodoistSyncResult({
+        actionId: conflictingCandidate.id,
+        expectedRevision: conflictingCandidate.revision,
+        todoistSyncStatus: "completed_external"
+      }).action;
+      expect(conflict).toMatchObject({
+        id: conflictingCandidate.id,
+        status: "candidate",
+        todoistSyncStatus: "sync_conflict"
       });
     });
   });
