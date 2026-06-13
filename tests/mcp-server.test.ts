@@ -1,11 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
+import { SqliteBulkJournalStore } from "../src/bulk-journal/sqlite-bulk-journal-store.js";
 import type { EmailReader } from "../src/email/types.js";
 import { SqliteLedgerStore } from "../src/ledger/sqlite-ledger-store.js";
 import { createMcpServer } from "../src/mcp-server.js";
@@ -67,6 +69,12 @@ const emailReader: EmailReader = {
   })),
   getEmailHeaders: vi.fn(async (mailbox, uid) => ({ mailbox, uid, headers: "Subject: test" })),
   getEmailSource: vi.fn(async (mailbox, uid) => ({ mailbox, uid, source: "Subject: test\n\nbody" })),
+  getEmailState: vi.fn(async (mailbox, uid) => ({
+    mailbox,
+    uid,
+    read: false,
+    flagged: false
+  })),
   setEmailReadStatus: vi.fn(async (mailbox, uid, read) => ({
     mailbox,
     uid,
@@ -132,6 +140,7 @@ describe("MCP tools", () => {
         "get_mail_action",
         "get_mailbox_status",
         "get_bulk_operation_diagnostics",
+        "get_bulk_operation_status",
         "get_quota",
         "get_server_capabilities",
         "get_mail_rules",
@@ -145,6 +154,7 @@ describe("MCP tools", () => {
         "record_mail_action_location",
         "record_todoist_sync_results",
         "rename_mailbox",
+        "resume_bulk_operation",
         "revert_mail_rules_revision",
         "search_mail_actions",
         "set_emails_flagged_status",
@@ -162,6 +172,13 @@ describe("MCP tools", () => {
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false
+      });
+      expect(
+        result.tools.find((tool) => tool.name === "resume_bulk_operation")?.annotations
+      ).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true
       });
       expect(
         result.tools.find((tool) => tool.name === "set_emails_read_status")?.annotations
@@ -185,9 +202,11 @@ describe("MCP tools", () => {
       const moveOutputSchema = result.tools.find((tool) => tool.name === "move_emails")?.outputSchema;
       expect(moveOutputSchema).toBeDefined();
       for (const toolName of bulkToolNames) {
-        expect(result.tools.find((tool) => tool.name === toolName)?.outputSchema).toEqual(
-          moveOutputSchema
-        );
+        const tool = result.tools.find((candidate) => candidate.name === toolName);
+        expect(tool?.outputSchema).toEqual(moveOutputSchema);
+        expect(tool?.inputSchema).toMatchObject({
+          required: expect.arrayContaining(["bulkId", "operations"])
+        });
       }
       expect(result.tools.find((tool) => tool.name === "search_emails")?._meta).toEqual({
         securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }]
@@ -925,9 +944,11 @@ describe("MCP tools", () => {
 
   it("여러 읽음 상태 변경을 한 호출에서 처리하고 작업별 성공을 반환함", async () => {
     await withClient(async (client) => {
+      const bulkId = randomUUID();
       const result = await client.callTool({
         name: "set_emails_read_status",
         arguments: {
+          bulkId,
           operations: [
             { id: "read-inbox", mailbox: "INBOX", uid: 42, read: true },
             { id: "unread-other", mailbox: "Other", uid: 7, read: false }
@@ -939,9 +960,15 @@ describe("MCP tools", () => {
       expect(emailReader.setEmailReadStatus).toHaveBeenCalledWith("Other", 7, false);
       expect(result.structuredContent).toEqual({
         result: {
+          bulkId,
+          tool: "set_emails_read_status",
+          status: "succeeded",
           attempted: 2,
           succeeded: 2,
           failed: 0,
+          pending: 0,
+          running: 0,
+          uncertain: 0,
           results: [
             { id: "read-inbox", status: "succeeded" },
             { id: "unread-other", status: "succeeded" }
@@ -953,6 +980,7 @@ describe("MCP tools", () => {
 
   it("여러 이동을 처리하고 개별 실패 후 다음 작업을 계속함", async () => {
     await withClient(async (client) => {
+      const bulkId = randomUUID();
       vi.mocked(emailReader.moveEmail)
         .mockRejectedValueOnce(new Error("대상 편지함을 찾을 수 없음"))
         .mockResolvedValueOnce({
@@ -965,6 +993,7 @@ describe("MCP tools", () => {
       const result = await client.callTool({
         name: "move_emails",
         arguments: {
+          bulkId,
           operations: [
             { id: "missing-target", mailbox: "INBOX", uid: 42, destinationMailbox: "Missing" },
             { id: "move-other", mailbox: "Other", uid: 7, destinationMailbox: "Target" }
@@ -975,9 +1004,15 @@ describe("MCP tools", () => {
       expect(emailReader.moveEmail).toHaveBeenCalledWith("Other", 7, "Target");
       expect(result.structuredContent).toEqual({
         result: {
+          bulkId,
+          tool: "move_emails",
+          status: "failed",
           attempted: 2,
           succeeded: 1,
           failed: 1,
+          pending: 0,
+          running: 0,
+          uncertain: 0,
           results: [
             {
               id: "missing-target",
@@ -997,6 +1032,7 @@ describe("MCP tools", () => {
 
   it("벌크 이동 응답은 구조화 응답과 같은 완전한 단일행 JSON 텍스트를 반환함", async () => {
     await withClient(async (client) => {
+      const bulkId = randomUUID();
       const operations = Array.from({ length: 5 }, (_, index) => ({
         id: `move-${index + 1}`,
         mailbox: "INBOX",
@@ -1005,14 +1041,20 @@ describe("MCP tools", () => {
       }));
       const result = await client.callTool({
         name: "move_emails",
-        arguments: { operations }
+        arguments: { bulkId, operations }
       });
 
       expect(result.structuredContent).toEqual({
         result: {
+          bulkId,
+          tool: "move_emails",
+          status: "succeeded",
           attempted: 5,
           succeeded: 5,
           failed: 0,
+          pending: 0,
+          running: 0,
+          uncertain: 0,
           results: operations.map(({ id }) => ({ id, status: "succeeded" }))
         }
       });
@@ -1034,6 +1076,7 @@ describe("MCP tools", () => {
       await client.callTool({
         name: "trash_emails",
         arguments: {
+          bulkId: randomUUID(),
           operations: [
             { id: "trash-inbox", mailbox: "INBOX", uid: 42 },
             { id: "trash-other", mailbox: "Other", uid: 7 }
@@ -1042,7 +1085,10 @@ describe("MCP tools", () => {
       });
       await client.callTool({
         name: "mark_emails_as_spam",
-        arguments: { operations: [{ id: "spam-inbox", mailbox: "INBOX", uid: 43 }] }
+        arguments: {
+          bulkId: randomUUID(),
+          operations: [{ id: "spam-inbox", mailbox: "INBOX", uid: 43 }]
+        }
       });
 
       expect(emailReader.trashEmail).toHaveBeenCalledWith("INBOX", 42);
@@ -1057,6 +1103,7 @@ describe("MCP tools", () => {
       const result = await client.callTool({
         name: "set_emails_read_status",
         arguments: {
+          bulkId: randomUUID(),
           operations: [
             { id: "duplicate", mailbox: "INBOX", uid: 42, read: true },
             { id: "duplicate", mailbox: "INBOX", uid: 42, read: false }
@@ -1074,6 +1121,7 @@ describe("MCP tools", () => {
       const result = await client.callTool({
         name: "copy_emails",
         arguments: {
+          bulkId: randomUUID(),
           operations: [
             { id: "copy-a", mailbox: "INBOX", uid: 42, destinationMailbox: "A" },
             { id: "copy-b", mailbox: "INBOX", uid: 42, destinationMailbox: "B" }
@@ -1087,11 +1135,151 @@ describe("MCP tools", () => {
     });
   });
 
+  it("동일 bulkId 재호출은 작업을 다시 실행하지 않고 영속 상태를 반환함", async () => {
+    await withClient(async (client) => {
+      const bulkId = randomUUID();
+      const before = vi.mocked(emailReader.copyEmail).mock.calls.length;
+      const arguments_ = {
+        bulkId,
+        operations: [{
+          id: "copy-once",
+          mailbox: "INBOX",
+          uid: 42,
+          destinationMailbox: "Target"
+        }]
+      };
+
+      await client.callTool({ name: "copy_emails", arguments: arguments_ });
+      const retried = await client.callTool({ name: "copy_emails", arguments: arguments_ });
+      const status = await client.callTool({
+        name: "get_bulk_operation_status",
+        arguments: { bulkId }
+      });
+
+      expect(vi.mocked(emailReader.copyEmail).mock.calls).toHaveLength(before + 1);
+      expect(retried.structuredContent).toMatchObject({
+        result: { bulkId, status: "succeeded", succeeded: 1 }
+      });
+      expect(status.structuredContent).toEqual(retried.structuredContent);
+      expect(JSON.stringify(status.structuredContent)).not.toContain("INBOX");
+      expect(JSON.stringify(status.structuredContent)).not.toContain("Target");
+      expect(JSON.stringify(status.structuredContent)).not.toContain("\"uid\"");
+    });
+  });
+
+  it("재개 도구는 pending 작업만 실행하고 uncertain 작업은 재시도하지 않음", async () => {
+    await withClient(async (client, { bulkJournalStore }) => {
+      const bulkId = randomUUID();
+      bulkJournalStore.beginBulk(bulkId, "copy_emails", [
+        {
+          id: "uncertain-copy",
+          mailbox: "INBOX",
+          uid: 42,
+          destinationMailbox: "Target"
+        },
+        {
+          id: "pending-copy",
+          mailbox: "Other",
+          uid: 7,
+          destinationMailbox: "Target"
+        }
+      ]);
+      bulkJournalStore.claimPending(bulkId, "uncertain-copy");
+      bulkJournalStore.recoverRunning();
+      const before = vi.mocked(emailReader.copyEmail).mock.calls.length;
+
+      const resumed = await client.callTool({
+        name: "resume_bulk_operation",
+        arguments: { bulkId }
+      });
+
+      expect(vi.mocked(emailReader.copyEmail).mock.calls).toHaveLength(before + 1);
+      expect(emailReader.copyEmail).toHaveBeenLastCalledWith("Other", 7, "Target");
+      expect(resumed.structuredContent).toMatchObject({
+        result: {
+          bulkId,
+          status: "uncertain",
+          succeeded: 1,
+          uncertain: 1,
+          results: [
+            { id: "uncertain-copy", status: "uncertain" },
+            { id: "pending-copy", status: "succeeded" }
+          ]
+        }
+      });
+    });
+  });
+
+  it("재개 도구는 uncertain 읽음 작업을 현재 상태로 확정하거나 안전하게 재실행함", async () => {
+    await withClient(async (client, { bulkJournalStore }) => {
+      const bulkId = randomUUID();
+      bulkJournalStore.beginBulk(bulkId, "set_emails_read_status", [
+        { id: "already-read", mailbox: "INBOX", uid: 42, read: true },
+        { id: "needs-retry", mailbox: "Other", uid: 7, read: true }
+      ]);
+      bulkJournalStore.claimPending(bulkId, "already-read");
+      bulkJournalStore.claimPending(bulkId, "needs-retry");
+      bulkJournalStore.recoverRunning();
+      vi.mocked(emailReader.getEmailState)
+        .mockResolvedValueOnce({ mailbox: "INBOX", uid: 42, read: true, flagged: false })
+        .mockResolvedValueOnce({ mailbox: "Other", uid: 7, read: false, flagged: false });
+      const beforeState = vi.mocked(emailReader.getEmailState).mock.calls.length;
+      const before = vi.mocked(emailReader.setEmailReadStatus).mock.calls.length;
+
+      const resumed = await client.callTool({
+        name: "resume_bulk_operation",
+        arguments: { bulkId }
+      });
+
+      expect(vi.mocked(emailReader.getEmailState).mock.calls).toHaveLength(beforeState + 2);
+      expect(vi.mocked(emailReader.setEmailReadStatus).mock.calls).toHaveLength(before + 1);
+      expect(emailReader.setEmailReadStatus).toHaveBeenLastCalledWith("Other", 7, true);
+      expect(resumed.structuredContent).toMatchObject({
+        result: {
+          bulkId,
+          status: "succeeded",
+          succeeded: 2,
+          uncertain: 0
+        }
+      });
+    });
+  });
+
+  it("uncertain 읽음 작업의 현재 상태를 조회할 수 없으면 uncertain으로 유지함", async () => {
+    await withClient(async (client, { bulkJournalStore }) => {
+      const bulkId = randomUUID();
+      bulkJournalStore.beginBulk(bulkId, "set_emails_read_status", [
+        { id: "unknown-read", mailbox: "INBOX", uid: 42, read: true }
+      ]);
+      bulkJournalStore.claimPending(bulkId, "unknown-read");
+      bulkJournalStore.recoverRunning();
+      vi.mocked(emailReader.getEmailState).mockRejectedValueOnce(new Error("IMAP 연결 실패"));
+      const before = vi.mocked(emailReader.setEmailReadStatus).mock.calls.length;
+
+      const resumed = await client.callTool({
+        name: "resume_bulk_operation",
+        arguments: { bulkId }
+      });
+
+      expect(vi.mocked(emailReader.setEmailReadStatus).mock.calls).toHaveLength(before);
+      expect(resumed.structuredContent).toMatchObject({
+        result: {
+          bulkId,
+          status: "uncertain",
+          failed: 0,
+          uncertain: 1,
+          results: [{ id: "unknown-read", status: "uncertain" }]
+        }
+      });
+    });
+  });
+
   it("최근 벌크 작업 진단에는 개인정보 없이 실행 요약만 반환함", async () => {
     await withClient(async (client) => {
       await client.callTool({
         name: "move_emails",
         arguments: {
+          bulkId: randomUUID(),
           operations: [{
             id: "diagnostic-operation",
             mailbox: "INBOX",
@@ -1232,12 +1420,20 @@ describe("MCP tools", () => {
   });
 });
 
-async function withClient(operation: (client: Client) => Promise<void>): Promise<void> {
+async function withClient(
+  operation: (
+    client: Client,
+    context: { bulkJournalStore: SqliteBulkJournalStore }
+  ) => Promise<void>
+): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "mmcp-mcp-policy-test-"));
-  const ledgerStore = new SqliteLedgerStore(join(directory, "workflow.sqlite"));
+  const workflowPath = join(directory, "workflow.sqlite");
+  const ledgerStore = new SqliteLedgerStore(workflowPath);
+  const bulkJournalStore = new SqliteBulkJournalStore(workflowPath);
   const server = createMcpServer(emailReader, {
     policyStore: new PolicyStore(join(directory, "policy.json")),
-    ledgerStore
+    ledgerStore,
+    bulkJournalStore
   });
   const client = new Client({ name: "mmcp-test", version: "0.1.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -1245,11 +1441,12 @@ async function withClient(operation: (client: Client) => Promise<void>): Promise
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    await operation(client);
+    await operation(client, { bulkJournalStore });
   } finally {
     await client.close();
     await server.close();
     ledgerStore.close();
+    bulkJournalStore.close();
     rmSync(directory, { recursive: true, force: true });
   }
 }

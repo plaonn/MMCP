@@ -3,6 +3,7 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 export const toolScopes: Record<string, "mail.read" | "mail.modify"> = {
   get_mail_rules: "mail.read",
   get_bulk_operation_diagnostics: "mail.read",
+  get_bulk_operation_status: "mail.read",
   preview_mail_rules_patch: "mail.read",
   apply_mail_rules_patch: "mail.modify",
   get_mail_rules_history: "mail.read",
@@ -31,6 +32,7 @@ export const toolScopes: Record<string, "mail.read" | "mail.modify"> = {
   move_emails: "mail.modify",
   trash_emails: "mail.modify",
   mark_emails_as_spam: "mail.modify",
+  resume_bulk_operation: "mail.modify",
   create_mailbox: "mail.modify",
   rename_mailbox: "mail.modify",
   set_mailbox_subscription: "mail.modify"

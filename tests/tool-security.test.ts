@@ -21,6 +21,8 @@ describe("tool security compatibility", () => {
           { name: "trash_emails", inputSchema: { type: "object" } },
           { name: "get_mail_rules", inputSchema: { type: "object" } },
           { name: "get_bulk_operation_diagnostics", inputSchema: { type: "object" } },
+          { name: "get_bulk_operation_status", inputSchema: { type: "object" } },
+          { name: "resume_bulk_operation", inputSchema: { type: "object" } },
           { name: "apply_mail_rules_patch", inputSchema: { type: "object" } }
         ]
       }
@@ -41,6 +43,8 @@ describe("tool security compatibility", () => {
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
+          { securitySchemes: [{ type: "oauth2", scopes: ["mail.read"] }] },
+          { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] },
           { securitySchemes: [{ type: "oauth2", scopes: ["mail.modify"] }] }
         ]
       }

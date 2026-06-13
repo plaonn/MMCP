@@ -7,6 +7,7 @@ import type {
   EmailDetail,
   EmailHeaders,
   EmailReader,
+  EmailState,
   EmailSource,
   EmailSummary,
   FlaggedStatusResult,
@@ -278,6 +279,26 @@ export class ImapEmailReader implements EmailReader {
         }
 
         return { mailbox, uid, read };
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async getEmailState(mailbox: string, uid: number): Promise<EmailState> {
+    return this.withClient(async (client) => {
+      const lock = await client.getMailboxLock(mailbox);
+      try {
+        const message = await client.fetchOne(uid, { uid: true, flags: true }, { uid: true });
+        if (!message) {
+          throw new Error("요청한 이메일을 찾을 수 없음");
+        }
+        return {
+          mailbox,
+          uid,
+          read: message.flags?.has("\\Seen") ?? false,
+          flagged: message.flags?.has("\\Flagged") ?? false
+        };
       } finally {
         lock.release();
       }

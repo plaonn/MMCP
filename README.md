@@ -68,6 +68,8 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 - `set_mailbox_subscription`: 편지함 구독 상태 변경
 - `get_mail_rules`: 최신 메일 관리 자연어 규칙 조회
 - `get_bulk_operation_diagnostics`: 현재 프로세스의 최근 벌크 작업 실행 요약 조회
+- `get_bulk_operation_status`: 호출자 제공 벌크 ID의 영속 작업 상태 조회
+- `resume_bulk_operation`: 대기 중 작업과 안전하게 복구 가능한 불확실 작업 재개
 - `preview_mail_rules_patch`: 규칙 단위 변경 미리보기
 - `apply_mail_rules_patch`: revision이 일치할 때 규칙 단위 변경 적용
 - `get_mail_rules_history`: 최근 규칙 revision 조회
@@ -84,9 +86,12 @@ authorization-code + PKCE 흐름과 DCR을 제공하며, 연결 승인 시
 영구 삭제, 휴지통 비우기, 편지함 삭제, 메일 발송 기능은 제공하지 않음.
 
 복수형 이메일 변경 도구는 한 호출에서 최대 100개 작업을 처리함. 작업마다
-고유한 `id`, 출발 편지함, IMAP UID와 필요한 상태 또는 목적지 편지함을 지정함.
-응답은 처리 개수와 작업별 `succeeded` 또는 `failed` 결과를 반환함. 일부
-작업만 성공할 수 있으며 transaction과 rollback은 지원하지 않음.
+호출자가 생성한 UUID `bulkId`, 고유한 작업 `id`, 출발 편지함, IMAP UID와
+필요한 상태 또는 목적지 편지함을 지정함. 작업 상태는 SQLite에 영속적으로
+기록되며 동일 `bulkId` 재호출은 기존 상태를 반환함. 서버 재시작 중 실행
+여부를 확정할 수 없는 작업은 `uncertain`으로 남김. `pending` 작업과 현재
+flags로 확인 가능한 읽음·별표 작업만 `resume_bulk_operation`으로 안전하게
+재개하며, 불확실한 복사·이동·휴지통·스팸 작업은 자동 재시도하지 않음.
 
 `get_emails`는 서로 다른 편지함의 이메일을 한 호출에서 최대 20건 조회함.
 기본적으로 이메일별 최대 2,000자와 호출 전체 최대 20,000자 범위의 본문

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import type { BulkJournalStore, JournaledBulk } from "./bulk-journal/types.js";
 import type { EmailDetail, EmailReader } from "./email/types.js";
 import {
   type LedgerStore,
@@ -21,6 +22,9 @@ const mailboxSchema = z.string().min(1).max(512);
 const uidSchema = z.number().int().positive();
 const operationIdSchema = z.string().min(1).max(100).describe(
   "호출 내에서 고유하며 실패 응답을 원래 작업과 연결하는 작업 식별자"
+);
+const bulkIdSchema = z.string().uuid().describe(
+  "재시도와 장애 후 상태 조회에 동일하게 사용하는 호출자 제공 벌크 식별자"
 );
 const defaultBulkEmailTextMaxChars = 2_000;
 const bulkEmailTextHardLimit = 20_000;
@@ -53,10 +57,24 @@ const emailDetailSchema = z.object({
   }))
 });
 const bulkResultSchema = z.object({
+  bulkId: bulkIdSchema,
+  tool: z.string(),
+  status: z.enum(["pending", "running", "succeeded", "failed", "uncertain"]),
   attempted: z.number().int().nonnegative(),
   succeeded: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+  uncertain: z.number().int().nonnegative(),
   results: z.array(z.discriminatedUnion("status", [
+    z.object({
+      id: operationIdSchema,
+      status: z.literal("pending")
+    }),
+    z.object({
+      id: operationIdSchema,
+      status: z.literal("running")
+    }),
     z.object({
       id: operationIdSchema,
       status: z.literal("succeeded")
@@ -66,6 +84,10 @@ const bulkResultSchema = z.object({
       status: z.literal("failed"),
       code: z.string(),
       error: z.string()
+    }),
+    z.object({
+      id: operationIdSchema,
+      status: z.literal("uncertain")
     })
   ]))
 });
@@ -241,7 +263,12 @@ const searchEmailsInputSchema = z.object({
 
 export function createMcpServer(
   emailReader: EmailReader,
-  options: { grantedScopes?: string[]; policyStore: PolicyStore; ledgerStore: LedgerStore }
+  options: {
+    grantedScopes?: string[];
+    policyStore: PolicyStore;
+    ledgerStore: LedgerStore;
+    bulkJournalStore: BulkJournalStore;
+  }
 ): McpServer {
   const server = new McpServer({
     name: "mmcp",
@@ -278,6 +305,44 @@ export function createMcpServer(
     },
     async (extra) =>
       withScope(options, extra, "mail.read", () => bulkDiagnostics.slice())
+  );
+
+  server.registerTool(
+    "get_bulk_operation_status",
+    {
+      title: "영속 벌크 작업 상태 조회",
+      description:
+        "호출자 제공 bulkId로 서버 재시작 후에도 벌크 작업과 개별 작업 상태를 조회함",
+      inputSchema: z.object({ bulkId: bulkIdSchema }),
+      outputSchema: bulkToolOutputSchema,
+      annotations: { readOnlyHint: true },
+      _meta: { securitySchemes: securitySchemes("mail.read") }
+    },
+    async ({ bulkId }, extra) =>
+      withScope(options, extra, "mail.read", () =>
+        summarizeJournal(options.bulkJournalStore.getBulk(bulkId))
+      )
+  );
+
+  server.registerTool(
+    "resume_bulk_operation",
+    {
+      title: "대기 중 벌크 작업 재개",
+      description:
+        "영속 벌크 작업에서 pending 작업을 재개함. uncertain 읽음·별표 작업은 현재 상태를 확인해 안전하게 복구하며 다른 uncertain 작업은 재시도하지 않음",
+      inputSchema: z.object({ bulkId: bulkIdSchema }),
+      outputSchema: bulkToolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true
+      },
+      _meta: { securitySchemes: securitySchemes("mail.modify") }
+    },
+    async ({ bulkId }, extra) =>
+      withScope(options, extra, "mail.modify", () =>
+        resumeJournaledBulk(emailReader, options.bulkJournalStore, bulkId)
+      )
   );
 
   server.registerTool(
@@ -587,6 +652,7 @@ export function createMcpServer(
       description:
         "최대 100개 이메일을 작업별 읽음 또는 읽지 않음 상태로 변경함. 일부 작업만 성공할 수 있으며 rollback은 지원하지 않음",
       inputSchema: z.object({
+        bulkId: bulkIdSchema,
         operations: readStatusOperationsSchema
       }),
       outputSchema: bulkToolOutputSchema,
@@ -597,10 +663,14 @@ export function createMcpServer(
       },
       _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ operations }, extra) =>
+    async ({ bulkId, operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
-        executeBulk("set_emails_read_status", operations, ({ mailbox, uid, read }) =>
-          emailReader.setEmailReadStatus(mailbox, uid, read)
+        executeJournaledBulk(
+          emailReader,
+          options.bulkJournalStore,
+          bulkId,
+          "set_emails_read_status",
+          operations
         )
       )
   );
@@ -612,6 +682,7 @@ export function createMcpServer(
       description:
         "최대 100개 이메일을 작업별 별표 또는 별표 해제 상태로 변경함. 일부 작업만 성공할 수 있으며 rollback은 지원하지 않음",
       inputSchema: z.object({
+        bulkId: bulkIdSchema,
         operations: flaggedStatusOperationsSchema
       }),
       outputSchema: bulkToolOutputSchema,
@@ -622,10 +693,14 @@ export function createMcpServer(
       },
       _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ operations }, extra) =>
+    async ({ bulkId, operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
-        executeBulk("set_emails_flagged_status", operations, ({ mailbox, uid, flagged }) =>
-          emailReader.setEmailFlaggedStatus(mailbox, uid, flagged)
+        executeJournaledBulk(
+          emailReader,
+          options.bulkJournalStore,
+          bulkId,
+          "set_emails_flagged_status",
+          operations
         )
       )
   );
@@ -637,6 +712,7 @@ export function createMcpServer(
       description:
         "최대 100개 이메일을 작업별 대상 편지함으로 복사함. 일부 작업만 성공할 수 있고 rollback을 지원하지 않으며 응답을 받지 못한 호출을 재시도하면 중복 복사될 수 있음",
       inputSchema: z.object({
+        bulkId: bulkIdSchema,
         operations: copyOperationsSchema
       }),
       outputSchema: bulkToolOutputSchema,
@@ -647,10 +723,14 @@ export function createMcpServer(
       },
       _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ operations }, extra) =>
+    async ({ bulkId, operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
-        executeBulk("copy_emails", operations, ({ mailbox, uid, destinationMailbox }) =>
-          emailReader.copyEmail(mailbox, uid, destinationMailbox)
+        executeJournaledBulk(
+          emailReader,
+          options.bulkJournalStore,
+          bulkId,
+          "copy_emails",
+          operations
         )
       )
   );
@@ -662,6 +742,7 @@ export function createMcpServer(
       description:
         "최대 100개 이메일을 작업별 일반 편지함으로 이동함. 휴지통과 스팸 이동은 전용 도구를 사용함. 일부 작업만 성공할 수 있으며 rollback은 지원하지 않음",
       inputSchema: z.object({
+        bulkId: bulkIdSchema,
         operations: moveOperationsSchema
       }),
       outputSchema: bulkToolOutputSchema,
@@ -672,10 +753,14 @@ export function createMcpServer(
       },
       _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ operations }, extra) =>
+    async ({ bulkId, operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
-        executeBulk("move_emails", operations, ({ mailbox, uid, destinationMailbox }) =>
-          emailReader.moveEmail(mailbox, uid, destinationMailbox)
+        executeJournaledBulk(
+          emailReader,
+          options.bulkJournalStore,
+          bulkId,
+          "move_emails",
+          operations
         )
       )
   );
@@ -686,7 +771,7 @@ export function createMcpServer(
       title: "여러 이메일 휴지통 이동",
       description:
         "최대 100개 이메일을 서버의 휴지통 특수 편지함으로 이동함. 일부 작업만 성공할 수 있으며 rollback은 지원하지 않음",
-      inputSchema: z.object({ operations: emailOperationsSchema }),
+      inputSchema: z.object({ bulkId: bulkIdSchema, operations: emailOperationsSchema }),
       outputSchema: bulkToolOutputSchema,
       annotations: {
         readOnlyHint: false,
@@ -695,10 +780,14 @@ export function createMcpServer(
       },
       _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ operations }, extra) =>
+    async ({ bulkId, operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
-        executeBulk("trash_emails", operations, ({ mailbox, uid }) =>
-          emailReader.trashEmail(mailbox, uid)
+        executeJournaledBulk(
+          emailReader,
+          options.bulkJournalStore,
+          bulkId,
+          "trash_emails",
+          operations
         )
       )
   );
@@ -709,7 +798,7 @@ export function createMcpServer(
       title: "여러 이메일 스팸 처리",
       description:
         "최대 100개 이메일을 서버의 스팸 특수 편지함으로 이동함. 일부 작업만 성공할 수 있으며 rollback은 지원하지 않음",
-      inputSchema: z.object({ operations: emailOperationsSchema }),
+      inputSchema: z.object({ bulkId: bulkIdSchema, operations: emailOperationsSchema }),
       outputSchema: bulkToolOutputSchema,
       annotations: {
         readOnlyHint: false,
@@ -718,10 +807,14 @@ export function createMcpServer(
       },
       _meta: { securitySchemes: securitySchemes("mail.modify") }
     },
-    async ({ operations }, extra) =>
+    async ({ bulkId, operations }, extra) =>
       withScope(options, extra, "mail.modify", () =>
-        executeBulk("mark_emails_as_spam", operations, ({ mailbox, uid }) =>
-          emailReader.markEmailAsSpam(mailbox, uid)
+        executeJournaledBulk(
+          emailReader,
+          options.bulkJournalStore,
+          bulkId,
+          "mark_emails_as_spam",
+          operations
         )
       )
   );
@@ -1013,16 +1106,13 @@ function emailKey(operation: { mailbox: string; uid: number }): string {
   return `${operation.mailbox}\0${operation.uid}`;
 }
 
-async function executeBulk<T extends { id: string }>(
+async function executeJournaledBulk<T extends { id: string } & Record<string, unknown>>(
+  emailReader: EmailReader,
+  store: BulkJournalStore,
+  bulkId: string,
   toolName: string,
-  operations: T[],
-  execute: (operation: T) => Promise<unknown>
+  operations: T[]
 ) {
-  const results: Array<
-    | { id: string; status: "succeeded" }
-    | { id: string; status: "failed"; code: string; error: string }
-  > = [];
-
   recordBulkDiagnostic({
     timestamp: new Date().toISOString(),
     tool: toolName,
@@ -1030,37 +1120,144 @@ async function executeBulk<T extends { id: string }>(
     attempted: operations.length
   });
 
-  for (const operation of operations) {
-    try {
-      await execute(operation);
-      results.push({
-        id: operation.id,
-        status: "succeeded"
-      });
-    } catch (error) {
-      results.push({
-        id: operation.id,
-        status: "failed",
-        ...bulkFailure(error)
-      });
-    }
+  const begun = store.beginBulk(bulkId, toolName, operations);
+  if (begun.created) {
+    await executePendingJournalOperations(emailReader, store, begun.bulk);
   }
-
-  const failed = results.filter((result) => result.status === "failed").length;
+  const summary = summarizeJournal(store.getBulk(bulkId));
   recordBulkDiagnostic({
     timestamp: new Date().toISOString(),
     tool: toolName,
     phase: "completed",
-    attempted: operations.length,
-    succeeded: operations.length - failed,
-    failed
+    attempted: summary.attempted,
+    succeeded: summary.succeeded,
+    failed: summary.failed
   });
+  return summary;
+}
 
+async function resumeJournaledBulk(
+  emailReader: EmailReader,
+  store: BulkJournalStore,
+  bulkId: string
+) {
+  const bulk = store.getBulk(bulkId);
+  await recoverIdempotentUncertainOperations(emailReader, store, bulk);
+  await executePendingJournalOperations(emailReader, store, bulk);
+  return summarizeJournal(store.getBulk(bulkId));
+}
+
+async function recoverIdempotentUncertainOperations(
+  emailReader: EmailReader,
+  store: BulkJournalStore,
+  bulk: JournaledBulk
+): Promise<void> {
+  if (bulk.tool !== "set_emails_read_status" && bulk.tool !== "set_emails_flagged_status") {
+    return;
+  }
+  for (const operation of bulk.operations) {
+    if (operation.status !== "uncertain") continue;
+    const mailbox = mailboxSchema.parse(operation.arguments.mailbox);
+    const uid = uidSchema.parse(operation.arguments.uid);
+    let state;
+    try {
+      state = await emailReader.getEmailState(mailbox, uid);
+    } catch {
+      continue;
+    }
+    const matches = bulk.tool === "set_emails_read_status"
+      ? state.read === z.boolean().parse(operation.arguments.read)
+      : state.flagged === z.boolean().parse(operation.arguments.flagged);
+    if (matches) {
+      store.markSucceeded(bulk.bulkId, operation.id);
+      continue;
+    }
+    if (!store.claimUncertain(bulk.bulkId, operation.id)) continue;
+    try {
+      await executeStoredEmailOperation(emailReader, bulk.tool, operation.arguments);
+      store.markSucceeded(bulk.bulkId, operation.id);
+    } catch (error) {
+      const failure = bulkFailure(error);
+      store.markFailed(bulk.bulkId, operation.id, failure.code, failure.error);
+    }
+  }
+}
+
+async function executePendingJournalOperations(
+  emailReader: EmailReader,
+  store: BulkJournalStore,
+  bulk: JournaledBulk
+): Promise<void> {
+  for (const operation of bulk.operations) {
+    if (operation.status !== "pending") continue;
+    if (!store.claimPending(bulk.bulkId, operation.id)) continue;
+    try {
+      await executeStoredEmailOperation(emailReader, bulk.tool, operation.arguments);
+      store.markSucceeded(bulk.bulkId, operation.id);
+    } catch (error) {
+      const failure = bulkFailure(error);
+      store.markFailed(bulk.bulkId, operation.id, failure.code, failure.error);
+    }
+  }
+}
+
+async function executeStoredEmailOperation(
+  emailReader: EmailReader,
+  tool: string,
+  input: Record<string, unknown>
+): Promise<unknown> {
+  const mailbox = mailboxSchema.parse(input.mailbox);
+  const uid = uidSchema.parse(input.uid);
+  switch (tool) {
+    case "set_emails_read_status":
+      return emailReader.setEmailReadStatus(mailbox, uid, z.boolean().parse(input.read));
+    case "set_emails_flagged_status":
+      return emailReader.setEmailFlaggedStatus(mailbox, uid, z.boolean().parse(input.flagged));
+    case "copy_emails":
+      return emailReader.copyEmail(
+        mailbox,
+        uid,
+        mailboxSchema.parse(input.destinationMailbox)
+      );
+    case "move_emails":
+      return emailReader.moveEmail(
+        mailbox,
+        uid,
+        mailboxSchema.parse(input.destinationMailbox)
+      );
+    case "trash_emails":
+      return emailReader.trashEmail(mailbox, uid);
+    case "mark_emails_as_spam":
+      return emailReader.markEmailAsSpam(mailbox, uid);
+    default:
+      throw new Error("지원하지 않는 영속 벌크 도구임");
+  }
+}
+
+function summarizeJournal(bulk: JournaledBulk) {
+  const count = (status: string) =>
+    bulk.operations.filter((operation) => operation.status === status).length;
   return {
-    attempted: operations.length,
-    succeeded: operations.length - failed,
-    failed,
-    results
+    bulkId: bulk.bulkId,
+    tool: bulk.tool,
+    status: bulk.status,
+    attempted: bulk.operations.length,
+    succeeded: count("succeeded"),
+    failed: count("failed"),
+    pending: count("pending"),
+    running: count("running"),
+    uncertain: count("uncertain"),
+    results: bulk.operations.map((operation) => {
+      if (operation.status === "failed") {
+        return {
+          id: operation.id,
+          status: operation.status,
+          code: operation.errorCode ?? "OPERATION_FAILED",
+          error: operation.error ?? "벌크 작업에 실패함"
+        };
+      }
+      return { id: operation.id, status: operation.status };
+    })
   };
 }
 

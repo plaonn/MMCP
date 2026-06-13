@@ -87,6 +87,27 @@ describe("IMAP 이메일 상태 관리", () => {
     expect(fake.messageFlagsRemove).toHaveBeenCalledWith(42, ["\\Seen"], { uid: true });
   });
 
+  it("복구용 이메일 상태 조회는 본문 없이 flags만 요청함", async () => {
+    const fake = createFakeClient();
+    fake.fetchOne.mockResolvedValueOnce({
+      uid: 42,
+      flags: new Set(["\\Seen", "\\Flagged"])
+    });
+    const reader = createReader(fake.client);
+
+    await expect(reader.getEmailState("INBOX", 42)).resolves.toEqual({
+      mailbox: "INBOX",
+      uid: 42,
+      read: true,
+      flagged: true
+    });
+    expect(fake.fetchOne).toHaveBeenCalledWith(
+      42,
+      { uid: true, flags: true },
+      { uid: true }
+    );
+  });
+
   it("명시한 편지함으로 이동하고 새 UID를 반환함", async () => {
     const fake = createFakeClient();
     const reader = createReader(fake.client);
@@ -257,6 +278,11 @@ function createFakeClient(mailboxList = mailboxes) {
     messages: 10,
     highestModseq: 999999999999999999n
   }));
+  const fetchOne = vi.fn(async (
+    uid: number
+  ): Promise<false | { uid: number; flags?: Set<string> }> =>
+    missingMessages.has(`${selectedMailbox}\0${uid}`) ? false : { uid }
+  );
 
   const client = {
     usable: true,
@@ -269,9 +295,7 @@ function createFakeClient(mailboxList = mailboxes) {
       selectedMailbox = mailbox;
       return { release: vi.fn() };
     }),
-    fetchOne: vi.fn(async (uid: number) =>
-      missingMessages.has(`${selectedMailbox}\0${uid}`) ? false : { uid }
-    ),
+    fetchOne,
     messageFlagsAdd,
     messageFlagsRemove,
     messageMove,
@@ -284,6 +308,7 @@ function createFakeClient(mailboxList = mailboxes) {
 
   return {
     client,
+    fetchOne,
     messageFlagsAdd,
     messageFlagsRemove,
     messageMove,

@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { Request, Response } from "express";
 import { rateLimit } from "express-rate-limit";
 
+import { SqliteBulkJournalStore } from "./bulk-journal/sqlite-bulk-journal-store.js";
 import type { Config } from "./config.js";
 import type { EmailReader } from "./email/types.js";
 import { SqliteLedgerStore } from "./ledger/sqlite-ledger-store.js";
@@ -25,6 +26,7 @@ export function createApp(config: Config, emailReader: EmailReader) {
   });
   const policyStore = new PolicyStore(config.policyPath);
   const ledgerStore = new SqliteLedgerStore(config.workflowDbPath);
+  const bulkJournalStore = new SqliteBulkJournalStore(config.workflowDbPath);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(config.publicUrl);
 
   app.use(mcpAuthRouter({
@@ -64,7 +66,8 @@ export function createApp(config: Config, emailReader: EmailReader) {
     const server = createMcpServer(emailReader, {
       grantedScopes: request.auth?.scopes ?? [],
       policyStore,
-      ledgerStore
+      ledgerStore,
+      bulkJournalStore
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

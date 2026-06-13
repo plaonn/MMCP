@@ -65,6 +65,12 @@ const emailReader: EmailReader = {
   })),
   getEmailHeaders: vi.fn(async (mailbox, uid) => ({ mailbox, uid, headers: "" })),
   getEmailSource: vi.fn(async (mailbox, uid) => ({ mailbox, uid, source: "" })),
+  getEmailState: vi.fn(async (mailbox, uid) => ({
+    mailbox,
+    uid,
+    read: false,
+    flagged: false
+  })),
   setEmailReadStatus: vi.fn(async (mailbox, uid, read) => ({ mailbox, uid, read })),
   setEmailFlaggedStatus: vi.fn(async (mailbox, uid, flagged) => ({
     mailbox,
@@ -342,7 +348,10 @@ describe("HTTP app", () => {
         jsonrpc: "2.0",
         id: 3,
         method: "tools/call",
-        params: { name: "move_emails", arguments: { operations } }
+        params: {
+          name: "move_emails",
+          arguments: { bulkId: "11111111-1111-4111-8111-111111111111", operations }
+        }
       })
     });
     expect(bulkToolCall.status).toBe(200);
@@ -354,9 +363,15 @@ describe("HTTP app", () => {
     };
     expect(bulkResponse.result.structuredContent).toEqual({
       result: {
+        bulkId: "11111111-1111-4111-8111-111111111111",
+        tool: "move_emails",
+        status: "succeeded",
         attempted: 5,
         succeeded: 5,
         failed: 0,
+        pending: 0,
+        running: 0,
+        uncertain: 0,
         results: operations.map(({ id }) => ({ id, status: "succeeded" }))
       }
     });

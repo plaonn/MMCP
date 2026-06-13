@@ -88,7 +88,9 @@ MMCP_HEALTH_URL=http://127.0.0.1:3000/health ./deploy/update-macos-service.sh
 
 새 schema를 사용하는 호출이 서버에 도달하기 전에 거부되면 MMCP 구현 오류로
 판단하기 전에 앱/커넥터 schema를 갱신하거나 재연결함. 갱신 후 도구 목록에서
-새 필드가 노출되는지 확인하고 동일 호출을 다시 검증함.
+새 필드가 노출되는지 확인함. 기존 대화는 갱신 전 tool resource 식별자를
+계속 보유하여 `Resource not found` dispatch 오류가 발생할 수 있으므로 실제
+호출 검증은 schema 갱신 후 시작한 새 대화에서 수행함.
 
 서버 측 자동 테스트와 서비스 health 확인만으로 ChatGPT가 최신 schema를
 사용한다고 판단하지 않음.

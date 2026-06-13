@@ -110,6 +110,13 @@ export type FlaggedStatusResult = {
   flagged: boolean;
 };
 
+export type EmailState = {
+  mailbox: string;
+  uid: number;
+  read: boolean;
+  flagged: boolean;
+};
+
 export type CopyEmailResult = {
   sourceMailbox: string;
   sourceUid: number;
@@ -142,6 +149,7 @@ export interface EmailReader {
   getEmail(mailbox: string, uid: number): Promise<EmailDetail>;
   getEmailHeaders(mailbox: string, uid: number): Promise<EmailHeaders>;
   getEmailSource(mailbox: string, uid: number): Promise<EmailSource>;
+  getEmailState(mailbox: string, uid: number): Promise<EmailState>;
   setEmailReadStatus(mailbox: string, uid: number, read: boolean): Promise<ReadStatusResult>;
   setEmailFlaggedStatus(
     mailbox: string,
