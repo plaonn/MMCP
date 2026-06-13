@@ -138,7 +138,7 @@ export class SqliteLedgerStore implements LedgerStore {
     const events = this.database.prepare(`
       SELECT * FROM mail_action_events
       WHERE action_id = ?
-      ORDER BY created_at ASC, id ASC
+      ORDER BY created_at ASC, rowid ASC
     `).all(actionId) as EventRow[];
     return {
       ...mapAction(row),
