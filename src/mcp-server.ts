@@ -56,6 +56,10 @@ const emailDetailSchema = z.object({
     disposition: z.string().nullable()
   }))
 });
+const destinationLocationSchema = z.object({
+  destinationMailbox: mailboxSchema,
+  destinationUid: uidSchema.nullable()
+});
 const bulkResultSchema = z.object({
   bulkId: bulkIdSchema,
   tool: z.string(),
@@ -77,7 +81,8 @@ const bulkResultSchema = z.object({
     }),
     z.object({
       id: operationIdSchema,
-      status: z.literal("succeeded")
+      status: z.literal("succeeded"),
+      result: destinationLocationSchema.optional()
     }),
     z.object({
       id: operationIdSchema,
@@ -1174,8 +1179,8 @@ async function recoverIdempotentUncertainOperations(
     }
     if (!store.claimUncertain(bulk.bulkId, operation.id)) continue;
     try {
-      await executeStoredEmailOperation(emailReader, bulk.tool, operation.arguments);
-      store.markSucceeded(bulk.bulkId, operation.id);
+      const result = await executeStoredEmailOperation(emailReader, bulk.tool, operation.arguments);
+      store.markSucceeded(bulk.bulkId, operation.id, storedSuccessResult(bulk.tool, result));
     } catch (error) {
       const failure = bulkFailure(error);
       store.markFailed(bulk.bulkId, operation.id, failure.code, failure.error);
@@ -1192,8 +1197,8 @@ async function executePendingJournalOperations(
     if (operation.status !== "pending") continue;
     if (!store.claimPending(bulk.bulkId, operation.id)) continue;
     try {
-      await executeStoredEmailOperation(emailReader, bulk.tool, operation.arguments);
-      store.markSucceeded(bulk.bulkId, operation.id);
+      const result = await executeStoredEmailOperation(emailReader, bulk.tool, operation.arguments);
+      store.markSucceeded(bulk.bulkId, operation.id, storedSuccessResult(bulk.tool, result));
     } catch (error) {
       const failure = bulkFailure(error);
       store.markFailed(bulk.bulkId, operation.id, failure.code, failure.error);
@@ -1256,8 +1261,25 @@ function summarizeJournal(bulk: JournaledBulk) {
           error: operation.error ?? "벌크 작업에 실패함"
         };
       }
+      if (operation.status === "succeeded" && operation.result !== null) {
+        return { id: operation.id, status: operation.status, result: operation.result };
+      }
       return { id: operation.id, status: operation.status };
     })
+  };
+}
+
+function storedSuccessResult(
+  tool: string,
+  result: unknown
+): Record<string, unknown> | undefined {
+  if (!["copy_emails", "move_emails", "trash_emails", "mark_emails_as_spam"].includes(tool)) {
+    return undefined;
+  }
+  const parsed = destinationLocationSchema.parse(result);
+  return {
+    destinationMailbox: parsed.destinationMailbox,
+    destinationUid: parsed.destinationUid
   };
 }
 

@@ -59,6 +59,82 @@ describe("SqliteBulkJournalStore", () => {
     });
   });
 
+  it("성공 결과 payload를 서버 재시작 후에도 보존함", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mmcp-bulk-journal-test-"));
+    const path = join(directory, "workflow.sqlite");
+    const bulkId = "55555555-5555-4555-8555-555555555555";
+    const first = new SqliteBulkJournalStore(path);
+    first.beginBulk(bulkId, "move_emails", [
+      { id: "move", mailbox: "INBOX", uid: 1, destinationMailbox: "Target" }
+    ]);
+    first.claimPending(bulkId, "move");
+    first.markSucceeded(bulkId, "move", {
+      destinationMailbox: "Target",
+      destinationUid: 84
+    });
+    first.close();
+
+    const reopened = new SqliteBulkJournalStore(path);
+    try {
+      expect(reopened.getBulk(bulkId)).toMatchObject({
+        operations: [{
+          id: "move",
+          status: "succeeded",
+          result: {
+            destinationMailbox: "Target",
+            destinationUid: 84
+          }
+        }]
+      });
+    } finally {
+      reopened.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("result_json 열이 없는 기존 벌크 저널을 자동 migration함", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mmcp-bulk-journal-test-"));
+    const path = join(directory, "workflow.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE bulk_calls (
+        bulk_id TEXT PRIMARY KEY,
+        tool TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE bulk_operations (
+        bulk_id TEXT NOT NULL REFERENCES bulk_calls(bulk_id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        arguments_json TEXT NOT NULL,
+        error_code TEXT,
+        error_message TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (bulk_id, operation_id)
+      );
+    `);
+    database.close();
+
+    const store = new SqliteBulkJournalStore(path);
+    try {
+      const columns = new DatabaseSync(path);
+      try {
+        expect(
+          (columns.prepare("PRAGMA table_info(bulk_operations)").all() as Array<{ name: string }>)
+            .map(({ name }) => name)
+        ).toContain("result_json");
+      } finally {
+        columns.close();
+      }
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("마지막 갱신 후 30일이 지난 완료 벌크를 시작 시 정리함", () => {
     const directory = mkdtempSync(join(tmpdir(), "mmcp-bulk-journal-test-"));
     const path = join(directory, "workflow.sqlite");

@@ -1022,7 +1022,11 @@ describe("MCP tools", () => {
             },
             {
               id: "move-other",
-              status: "succeeded"
+              status: "succeeded",
+              result: {
+                destinationMailbox: "Target",
+                destinationUid: 9
+              }
             }
           ]
         }
@@ -1055,7 +1059,14 @@ describe("MCP tools", () => {
           pending: 0,
           running: 0,
           uncertain: 0,
-          results: operations.map(({ id }) => ({ id, status: "succeeded" }))
+          results: operations.map(({ id }) => ({
+            id,
+            status: "succeeded",
+            result: {
+              destinationMailbox: "Target",
+              destinationUid: 84
+            }
+          }))
         }
       });
       const content = result.content as Array<{ type: string; text?: string }>;
@@ -1073,7 +1084,7 @@ describe("MCP tools", () => {
 
   it("여러 휴지통과 스팸 처리를 별도 도구로 전달함", async () => {
     await withClient(async (client) => {
-      await client.callTool({
+      const trashed = await client.callTool({
         name: "trash_emails",
         arguments: {
           bulkId: randomUUID(),
@@ -1083,7 +1094,7 @@ describe("MCP tools", () => {
           ]
         }
       });
-      await client.callTool({
+      const spammed = await client.callTool({
         name: "mark_emails_as_spam",
         arguments: {
           bulkId: randomUUID(),
@@ -1094,6 +1105,28 @@ describe("MCP tools", () => {
       expect(emailReader.trashEmail).toHaveBeenCalledWith("INBOX", 42);
       expect(emailReader.trashEmail).toHaveBeenCalledWith("Other", 7);
       expect(emailReader.markEmailAsSpam).toHaveBeenCalledWith("INBOX", 43);
+      expect(trashed.structuredContent).toMatchObject({
+        result: {
+          results: [
+            {
+              id: "trash-inbox",
+              result: { destinationMailbox: "Trash", destinationUid: 84 }
+            },
+            {
+              id: "trash-other",
+              result: { destinationMailbox: "Trash", destinationUid: 84 }
+            }
+          ]
+        }
+      });
+      expect(spammed.structuredContent).toMatchObject({
+        result: {
+          results: [{
+            id: "spam-inbox",
+            result: { destinationMailbox: "Spam", destinationUid: 84 }
+          }]
+        }
+      });
     });
   });
 
@@ -1162,8 +1195,64 @@ describe("MCP tools", () => {
       });
       expect(status.structuredContent).toEqual(retried.structuredContent);
       expect(JSON.stringify(status.structuredContent)).not.toContain("INBOX");
-      expect(JSON.stringify(status.structuredContent)).not.toContain("Target");
-      expect(JSON.stringify(status.structuredContent)).not.toContain("\"uid\"");
+      expect(status.structuredContent).toMatchObject({
+        result: {
+          results: [{
+            id: "copy-once",
+            status: "succeeded",
+            result: {
+              destinationMailbox: "Target",
+              destinationUid: 84
+            }
+          }]
+        }
+      });
+      expect(JSON.stringify(status.structuredContent)).not.toContain("sourceMailbox");
+      expect(JSON.stringify(status.structuredContent)).not.toContain("sourceUid");
+      expect(JSON.stringify(status.structuredContent)).not.toContain("arguments");
+    });
+  });
+
+  it("복사 성공에서 목적지 UID mapping이 없으면 null을 영속 반환함", async () => {
+    await withClient(async (client) => {
+      const bulkId = randomUUID();
+      vi.mocked(emailReader.copyEmail).mockResolvedValueOnce({
+        sourceMailbox: "INBOX",
+        sourceUid: 42,
+        destinationMailbox: "Target",
+        destinationUid: null
+      });
+
+      const created = await client.callTool({
+        name: "copy_emails",
+        arguments: {
+          bulkId,
+          operations: [{
+            id: "copy-without-mapping",
+            mailbox: "INBOX",
+            uid: 42,
+            destinationMailbox: "Target"
+          }]
+        }
+      });
+      const status = await client.callTool({
+        name: "get_bulk_operation_status",
+        arguments: { bulkId }
+      });
+
+      expect(created.structuredContent).toMatchObject({
+        result: {
+          results: [{
+            id: "copy-without-mapping",
+            status: "succeeded",
+            result: {
+              destinationMailbox: "Target",
+              destinationUid: null
+            }
+          }]
+        }
+      });
+      expect(status.structuredContent).toEqual(created.structuredContent);
     });
   });
 

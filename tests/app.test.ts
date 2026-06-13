@@ -372,7 +372,14 @@ describe("HTTP app", () => {
         pending: 0,
         running: 0,
         uncertain: 0,
-        results: operations.map(({ id }) => ({ id, status: "succeeded" }))
+        results: operations.map(({ id }) => ({
+          id,
+          status: "succeeded",
+          result: {
+            destinationMailbox: "Target",
+            destinationUid: null
+          }
+        }))
       }
     });
     expect(bulkResponse.result.content).toHaveLength(1);

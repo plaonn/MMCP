@@ -58,10 +58,9 @@
    - fetch 대상 URL의 private IP, localhost, link-local, 내부망 접근 차단
    - 파일 크기, redirect, timeout, MIME allowlist 제한
    - 원본 파일보다 텍스트/Markdown/CSV 추출 결과 우선 제공
-2. 이동·복사 성공 결과의 목적지 UID 노출
-3. 여러 편지함 상태 요약 조회
-4. 제한적인 분류 보조 메타데이터 추출
-5. 첨부파일 텍스트 추출
+2. 여러 편지함 상태 요약 조회
+3. 제한적인 분류 보조 메타데이터 추출
+4. 첨부파일 텍스트 추출
 
 - dry-run과 custom flag는 실제 필요성이 확인될 때 다시 검토
 - 로컬 검색 색인

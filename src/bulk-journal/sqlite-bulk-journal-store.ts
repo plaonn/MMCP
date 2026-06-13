@@ -21,6 +21,7 @@ type OperationRow = {
   operation_id: string;
   status: BulkOperationStatus;
   arguments_json: string;
+  result_json: string | null;
   error_code: string | null;
   error_message: string | null;
 };
@@ -75,8 +76,8 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
       const insertOperation = this.database.prepare(`
         INSERT INTO bulk_operations (
           bulk_id, operation_id, ordinal, status, arguments_json,
-          error_code, error_message, updated_at
-        ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, ?)
+          result_json, error_code, error_message, updated_at
+        ) VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, ?)
       `);
       operations.forEach(({ id, ...arguments_ }, ordinal) => {
         insertOperation.run(bulkId, id, ordinal, JSON.stringify(arguments_), now);
@@ -111,7 +112,8 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
     const now = new Date().toISOString();
     const result = this.database.prepare(`
       UPDATE bulk_operations
-      SET status = 'running', error_code = NULL, error_message = NULL, updated_at = ?
+      SET status = 'running', result_json = NULL, error_code = NULL,
+          error_message = NULL, updated_at = ?
       WHERE bulk_id = ? AND operation_id = ? AND status = ?
     `).run(now, bulkId, operationId, currentStatus);
     if (result.changes === 1) {
@@ -121,12 +123,16 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
     return false;
   }
 
-  markSucceeded(bulkId: string, operationId: string): void {
-    this.updateOperation(bulkId, operationId, "succeeded", null, null);
+  markSucceeded(
+    bulkId: string,
+    operationId: string,
+    result?: Record<string, unknown>
+  ): void {
+    this.updateOperation(bulkId, operationId, "succeeded", result ?? null, null, null);
   }
 
   markFailed(bulkId: string, operationId: string, code: string, error: string): void {
-    this.updateOperation(bulkId, operationId, "failed", code, error);
+    this.updateOperation(bulkId, operationId, "failed", null, code, error);
   }
 
   recoverRunning(): number {
@@ -138,7 +144,7 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
     `).all() as Array<{ bulk_id: string }>;
     const result = this.database.prepare(`
       UPDATE bulk_operations
-      SET status = 'uncertain', updated_at = ?
+      SET status = 'uncertain', result_json = NULL, updated_at = ?
       WHERE status = 'running'
     `).run(now);
     affectedBulks.forEach(({ bulk_id }) => this.refreshBulkStatus(bulk_id, now));
@@ -161,6 +167,7 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
         ordinal INTEGER NOT NULL,
         status TEXT NOT NULL,
         arguments_json TEXT NOT NULL,
+        result_json TEXT,
         error_code TEXT,
         error_message TEXT,
         updated_at TEXT NOT NULL,
@@ -170,6 +177,7 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
       CREATE INDEX IF NOT EXISTS idx_bulk_calls_updated_at ON bulk_calls(updated_at);
       CREATE INDEX IF NOT EXISTS idx_bulk_operations_status ON bulk_operations(status);
     `);
+    this.addColumnIfMissing("bulk_operations", "result_json", "TEXT");
   }
 
   private getBulkOrNull(bulkId: string): JournaledBulk | null {
@@ -178,7 +186,7 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
     ).get(bulkId) as BulkRow | undefined;
     if (!row) return null;
     const operations = this.database.prepare(`
-      SELECT operation_id, status, arguments_json, error_code, error_message
+      SELECT operation_id, status, arguments_json, result_json, error_code, error_message
       FROM bulk_operations
       WHERE bulk_id = ?
       ORDER BY ordinal ASC
@@ -197,16 +205,25 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
     bulkId: string,
     operationId: string,
     status: BulkOperationStatus,
+    operationResult: Record<string, unknown> | null,
     errorCode: string | null,
     error: string | null
   ): void {
     const now = new Date().toISOString();
-    const result = this.database.prepare(`
+    const updateResult = this.database.prepare(`
       UPDATE bulk_operations
-      SET status = ?, error_code = ?, error_message = ?, updated_at = ?
+      SET status = ?, result_json = ?, error_code = ?, error_message = ?, updated_at = ?
       WHERE bulk_id = ? AND operation_id = ?
-    `).run(status, errorCode, error, now, bulkId, operationId);
-    if (result.changes !== 1) throw new Error("벌크 작업 항목을 찾을 수 없음");
+    `).run(
+      status,
+      operationResult === null ? null : JSON.stringify(operationResult),
+      errorCode,
+      error,
+      now,
+      bulkId,
+      operationId
+    );
+    if (updateResult.changes !== 1) throw new Error("벌크 작업 항목을 찾을 수 없음");
     this.refreshBulkStatus(bulkId, now);
   }
 
@@ -229,6 +246,15 @@ export class SqliteBulkJournalStore implements BulkJournalStore {
         AND status IN ('succeeded', 'failed')
     `).run(cutoff);
   }
+
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const columns = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some(({ name }) => name === column)) {
+      this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
 }
 
 function aggregateStatus(statuses: BulkOperationStatus[]): BulkOperationStatus {
@@ -244,6 +270,9 @@ function mapOperation(row: OperationRow): JournaledBulkOperation {
     id: row.operation_id,
     status: row.status,
     arguments: JSON.parse(row.arguments_json) as Record<string, unknown>,
+    result: row.result_json === null
+      ? null
+      : JSON.parse(row.result_json) as Record<string, unknown>,
     errorCode: row.error_code,
     error: row.error_message
   };

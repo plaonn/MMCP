@@ -12,6 +12,7 @@ export type JournaledBulkOperation = {
   id: string;
   status: BulkOperationStatus;
   arguments: Record<string, unknown>;
+  result: Record<string, unknown> | null;
   errorCode: string | null;
   error: string | null;
 };
@@ -34,7 +35,11 @@ export interface BulkJournalStore {
   getBulk(bulkId: string): JournaledBulk;
   claimPending(bulkId: string, operationId: string): boolean;
   claimUncertain(bulkId: string, operationId: string): boolean;
-  markSucceeded(bulkId: string, operationId: string): void;
+  markSucceeded(
+    bulkId: string,
+    operationId: string,
+    result?: Record<string, unknown>
+  ): void;
   markFailed(bulkId: string, operationId: string, code: string, error: string): void;
   recoverRunning(): number;
   close(): void;

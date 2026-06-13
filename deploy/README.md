@@ -95,6 +95,11 @@ MMCP_HEALTH_URL=http://127.0.0.1:3000/health ./deploy/update-macos-service.sh
 서버 측 자동 테스트와 서비스 health 확인만으로 ChatGPT가 최신 schema를
 사용한다고 판단하지 않음.
 
+ChatGPT의 `api_tool.list_resources` 검색 결과는 호출 가능한 도구의 입력
+schema를 중심으로 노출하며 output schema 필드는 검색되지 않을 수 있음. 출력
+schema 변경은 입력 schema 검색 결과가 아니라 새 대화의 실제 도구 성공 응답과
+서버 측 `tools/list` 테스트로 검증함.
+
 ## 운영 상태 점검
 
 다음 스크립트는 비밀값과 이메일 내용을 출력하지 않고 MMCP/Caddy service
